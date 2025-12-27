@@ -1,93 +1,305 @@
-# irmai-kg-v2-cosmosdb
+# Knowledge Graph POC
 
+An interactive knowledge graph visualization application built with Next.js, Cytoscape.js, SurrealDB Cloud, and Azure OpenAI for intelligent entity and relationship extraction from various file formats.
 
+## Features
 
-## Getting started
+- **Interactive Graph Visualization**: Powered by Cytoscape.js with multiple layout algorithms (Cola, Dagre, Circle, Grid)
+- **Multi-format Document Processing**: Extract entities and relationships from text, PDF, CSV, and DOCX files
+- **AI-Powered Extraction**: Uses Azure OpenAI (GPT-4) to intelligently identify entities and relationships
+- **Graph Database Storage**: SurrealDB Cloud for efficient graph storage and querying
+- **Real-time Updates**: Live graph updates as new data is processed
+- **Entity Management**: Create, edit, delete entities and relationships
+- **Search & Filter**: Search entities and filter graph by entity types
+- **Export/Import**: Export graph data as JSON or PNG, import existing graphs
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Architecture
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/team-irmai/irmai-kg-v2-cosmosdb.git
-git branch -M main
-git push -uf origin main
+┌─────────────────────────────────────────────────────────────┐
+│                    Next.js Frontend                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │   Cytoscape  │  │  File Upload │  │  Node Detail │     │
+│  │  Visualization│  │   Component  │  │    Panel     │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│           │                 │                  │            │
+│           └─────────────────┼──────────────────┘            │
+│                             │                               │
+│                    ┌────────▼────────┐                      │
+│                    │  Zustand Store  │                      │
+│                    └────────┬────────┘                      │
+└─────────────────────────────┼───────────────────────────────┘
+                              │
+                    ┌─────────▼──────────┐
+                    │  Next.js API Routes│
+                    └─────────┬─────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+┌───────▼────────┐   ┌────────▼────────┐   ┌───────▼────────┐
+│  SurrealDB     │   │  Azure OpenAI   │   │  Document      │
+│  Cloud (WSS)   │   │  Service        │   │  Processors    │
+└────────────────┘   └─────────────────┘   └────────────────┘
 ```
 
-## Integrate with your tools
+## Prerequisites
 
-* [Set up project integrations](https://gitlab.com/team-irmai/irmai-kg-v2-cosmosdb/-/settings/integrations)
-
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- Node.js 18+ and npm
+- SurrealDB Cloud account and instance
+- Azure OpenAI resource with GPT-4 deployment
+- Environment variables configured (see below)
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd surrealdb-poc-v1
+   ```
+
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+3. **Configure environment variables**
+   ```bash
+   cp .env.example .env.local
+   ```
+   
+   Edit `.env.local` with your credentials:
+   - SurrealDB Cloud WSS URL, namespace, database, and JWT token
+   - Azure OpenAI endpoint, API key, and deployment name
+
+4. **Run the development server**
+   ```bash
+   npm run dev
+   ```
+
+5. **Open your browser**
+   Navigate to [http://localhost:3111](http://localhost:3111)
+
+## Environment Variables
+
+### SurrealDB Configuration
+- `NEXT_PUBLIC_SURREALDB_URL`: WebSocket URL for SurrealDB Cloud instance
+- `NEXT_PUBLIC_SURREALDB_NAMESPACE`: Namespace (e.g., "demo")
+- `NEXT_PUBLIC_SURREALDB_DATABASE`: Database name (e.g., "surreal_deal_store")
+- `SURREALDB_TOKEN`: JWT authentication token (server-side only)
+
+### Azure OpenAI Configuration
+- `AZURE_OPENAI_ENDPOINT`: Azure OpenAI resource endpoint
+- `AZURE_OPENAI_API_KEY`: Azure OpenAI API key
+- `AZURE_OPENAI_DEPLOYMENT_NAME`: Deployment name for GPT-4
+
+### Application Configuration
+- `NEXT_PUBLIC_APP_URL`: Application URL (default: http://localhost:3111)
+- `MAX_FILE_SIZE_MB`: Maximum file size in MB (default: 10)
+- `MAX_CHUNK_SIZE_TOKENS`: Maximum tokens per chunk for processing (default: 8000)
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Uploading Files
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+1. Click on the **Upload** tab
+2. Drag and drop files or click to select
+3. Supported formats: TXT, PDF, CSV, DOCX (max 10MB)
+4. Files are automatically processed and entities/relationships extracted
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+### Direct Text Input
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+1. Click on the **Input** tab
+2. Paste or type text into the textarea
+3. Click **Process Text**
+4. Review extracted entities and relationships before committing
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### Viewing Graph
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+- **Zoom**: Use mouse wheel or zoom controls
+- **Pan**: Click and drag the background
+- **Select Node**: Click on a node to view details
+- **Filter**: Use the filter button to show/hide entity types
+- **Search**: Use the search bar to find entities
+
+### Managing Entities
+
+- **View Details**: Click on a node to see properties and relationships
+- **Edit Properties**: Click the edit icon in the details panel
+- **Delete Entity**: Click delete button (removes connected relationships)
+- **Add Relationship**: Use the details panel (coming soon)
+
+### Export/Import
+
+- **Export JSON**: Download graph data as JSON
+- **Export PNG**: Export graph visualization as PNG
+- **Import**: Load previously exported graph data
+
+## Project Structure
+
+```
+/app
+  /api
+    /process          # File processing API route
+  page.tsx            # Main dashboard
+  layout.tsx          # Root layout
+  globals.css         # Global styles
+/components
+  GraphVisualization.tsx  # Cytoscape.js graph component
+  GraphControls.tsx       # Graph control toolbar
+  NodeDetailPanel.tsx     # Entity details panel
+  FileUpload.tsx          # File upload interface
+  TextInput.tsx           # Text input component
+  SettingsPanel.tsx       # Settings and configuration
+  ErrorBoundary.tsx       # Error boundary component
+/lib
+  surrealdb-client.ts     # SurrealDB connection service
+  schema.ts                # Graph schema definitions
+  store.ts                 # Zustand state management
+  test-data.ts             # Test data utilities
+/services
+  graph-operations.ts      # Graph CRUD operations
+  azure-openai.ts          # Azure OpenAI integration
+  document-processor.ts    # Document processing pipeline
+/hooks
+  useGraph.ts              # Graph operations hook
+  useSurrealDB.ts          # Database connection hook
+  useFileProcessor.ts      # File processing hook
+  useEntityExtraction.ts   # Entity extraction hook
+/types
+  index.ts                 # TypeScript type definitions
+```
+
+## API Documentation
+
+### POST `/api/process`
+
+Process a file or text to extract entities and relationships.
+
+**Request:**
+- `file` (FormData): File to process (optional)
+- `text` (FormData): Text to process (optional)
+
+**Response:**
+```json
+{
+  "success": true,
+  "document": { ... },
+  "entities": [ ... ],
+  "relationships": [ ... ],
+  "stats": {
+    "entityCount": 10,
+    "relationshipCount": 15
+  }
+}
+```
+
+### DELETE `/api/clear`
+
+Clear all data from the SurrealDB database (entities, relationships, and documents).
+
+**⚠️ Warning:** This permanently deletes all data from the database!
+
+**Request:**
+```bash
+curl -X DELETE http://localhost:3111/api/clear
+```
+
+**Alternative using POST:**
+```bash
+curl -X POST http://localhost:3111/api/clear
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "All data cleared successfully",
+  "deleted": {
+    "entitiesDeleted": 33,
+    "relationshipsDeleted": 35,
+    "documentsDeleted": 20
+  }
+}
+```
+
+## Entity Types
+
+- **Person**: Individual people
+- **Organization**: Companies, institutions, groups
+- **Location**: Places, cities, countries
+- **Concept**: Abstract ideas, topics
+- **Event**: Occurrences, happenings
+- **Technology**: Technologies, tools, systems
+
+## Relationship Types
+
+- **RELATED_TO**: General relationship
+- **PART_OF**: Entity is part of another
+- **WORKS_AT**: Person works at organization
+- **LOCATED_IN**: Entity is located in a place
+- **MENTIONS**: Entity mentions or references another
+- **CREATED_BY**: Entity was created by another
+
+## Troubleshooting
+
+### Connection Issues
+
+- **SurrealDB not connecting**: Check your WSS URL and JWT token
+- **Azure OpenAI errors**: Verify endpoint, API key, and deployment name
+- **Health check fails**: Ensure network connectivity and credentials
+
+### Processing Issues
+
+- **Large files timeout**: Increase `maxDuration` in API route or reduce file size
+- **Extraction fails**: Check Azure OpenAI quota and deployment status
+- **CSV parsing errors**: Ensure CSV has proper headers
+
+### Graph Visualization
+
+- **Graph not loading**: Check browser console for errors
+- **Nodes not appearing**: Verify entities were created in database
+- **Layout issues**: Try different layout algorithms in controls
+
+## Development
+
+### Running Tests
+
+Test data utilities are available in `lib/test-data.ts`:
+
+```typescript
+import { populateTestData, clearTestData } from "@/lib/test-data";
+
+// Populate with sample data
+await populateTestData();
+
+// Clear all data
+await clearTestData();
+```
+
+### Building for Production
+
+```bash
+npm run build
+npm start
+```
+
+## Future Enhancements
+
+- [ ] Real-time collaborative editing
+- [ ] Advanced graph algorithms (shortest path, centrality)
+- [ ] Batch processing for multiple files
+- [ ] Custom entity and relationship types
+- [ ] Graph analytics and insights
+- [ ] Export to other formats (GraphML, GEXF)
+- [ ] Integration with more document sources
+- [ ] Advanced search with filters
+- [ ] Relationship strength visualization
+- [ ] Timeline view for temporal relationships
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[Your License Here]
+
+## Contributing
+
+[Contributing Guidelines Here]

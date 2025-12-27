@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.local
+    environment:
+      - NODE_ENV=production
+    # Alternative: You can also set env vars directly here instead of using env_file
+    # environment:
+    #   - NODE_ENV=production
+    #   - SURREALDB_URL=ws://surrealdb:8000/rpc
+    #   - SURREALDB_USER=root
+    #   - SURREALDB_PASS=root
+    #   - AZURE_OPENAI_ENDPOINT=your-endpoint
+    #   - AZURE_OPENAI_API_KEY=your-key
+    # Uncomment if you need SurrealDB
+    # depends_on:
+    #   - surrealdb
+    # networks:
+    #   - app-network
+
+  # Uncomment if you want to run SurrealDB in Docker
+  # surrealdb:
+  #   image: surrealdb/surrealdb:latest
+  #   ports:
+  #     - "8000:8000"
+  #   command: start --log trace --user root --pass root memory
+  #   networks:
+  #     - app-network
+
+# networks:
+#   app-network:
+#     driver: bridge
+
