@@ -5,8 +5,9 @@ import type {
   Relationship,
   Document,
 } from "@/types";
+import { GraphDriver } from "./graph-driver.interface";
 
-export class GraphOperations {
+export class SurrealGraphDriver implements GraphDriver {
   // Entity Operations
   async createEntity(entity: Omit<Entity, "id" | "createdAt" | "updatedAt">): Promise<Entity> {
     try {
@@ -576,6 +577,3 @@ export class GraphOperations {
     };
   }
 }
-
-export const graphOps = new GraphOperations();
-

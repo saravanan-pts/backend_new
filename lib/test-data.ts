@@ -1,4 +1,4 @@
-import { graphOps } from "@/services/graph-operations";
+import { graph } from "@/services/graph";
 import type { Entity, Relationship } from "@/types";
 
 export const sampleEntities: Omit<Entity, "id" | "createdAt" | "updatedAt">[] = [
@@ -207,7 +207,7 @@ export async function populateTestData(): Promise<{
   const createdEntities: Entity[] = [];
   for (const entityData of sampleEntities) {
     try {
-      const entity = await graphOps.createEntity(entityData);
+      const entity = await graph.createEntity(entityData);
       createdEntities.push(entity);
     } catch (error) {
       console.error(`Error creating entity ${entityData.label}:`, error);
@@ -234,7 +234,7 @@ export async function populateTestData(): Promise<{
     }
 
     try {
-      const relationship = await graphOps.createRelationship(
+      const relationship = await graph.createRelationship(
         fromId,
         toId,
         relData.type,
@@ -265,13 +265,13 @@ export async function clearTestData(): Promise<void> {
   console.log("Clearing test data...");
 
   try {
-    const allEntities = await graphOps.getAllEntities();
-    const allRelationships = await graphOps.getAllRelationships();
+    const allEntities = await graph.getAllEntities();
+    const allRelationships = await graph.getAllRelationships();
 
     // Delete all relationships first
     for (const rel of allRelationships) {
       try {
-        await graphOps.deleteRelationship(rel.id);
+        await graph.deleteRelationship(rel.id);
       } catch (error) {
         console.error(`Error deleting relationship ${rel.id}:`, error);
       }
@@ -280,7 +280,7 @@ export async function clearTestData(): Promise<void> {
     // Delete all entities
     for (const entity of allEntities) {
       try {
-        await graphOps.deleteEntity(entity.id);
+        await graph.deleteEntity(entity.id);
       } catch (error) {
         console.error(`Error deleting entity ${entity.id}:`, error);
       }

@@ -1,9 +1,12 @@
 import { useCallback } from "react";
-import { graphOps } from "@/services/graph-operations";
 import { useGraphStore } from "@/lib/store";
-import { surrealDB } from "@/lib/surrealdb-client";
 import type { Entity, Relationship } from "@/types";
 
+/**
+ * Client-side graph hook
+ * Talks ONLY to /api/*
+ * No DB drivers, no gremlin, no surreal imports
+ */
 export function useGraph() {
   const {
     entities,
@@ -23,66 +26,54 @@ export function useGraph() {
     setLoading,
   } = useGraphStore();
 
-  const loadGraph = useCallback(async (documentId?: string | null) => {
-    // Check if connected before loading
-    const client = surrealDB.getClient();
-    if (!client) {
-      throw new Error("SurrealDB client not connected. Call connect() first.");
-    }
-    
-    setLoading(true);
-    try {
-      let allEntities: Entity[];
-      let allRelationships: Relationship[];
+  /* ===============================
+     LOAD GRAPH
+     =============================== */
 
-      if (documentId) {
-        // Load entities and relationships for specific document
-        [allEntities, allRelationships] = await Promise.all([
-          graphOps.getEntitiesByDocument(documentId),
-          graphOps.getAllRelationships(documentId),
-        ]);
-      } else {
-        // Load all entities and relationships
-        [allEntities, allRelationships] = await Promise.all([
-          graphOps.getAllEntities(),
-          graphOps.getAllRelationships(),
-        ]);
-      }
+  const loadGraph = useCallback(
+    async (documentId?: string | null) => {
+      setLoading(true);
+      try {
+        const url = documentId
+          ? `/api/graph?documentId=${documentId}`
+          : `/api/graph`;
 
-      setEntities(allEntities);
-      setRelationships(allRelationships);
-    } catch (error: any) {
-      // Handle connection and permission errors gracefully
-      if (error?.message?.includes("not connected")) {
-        console.warn("Graph loading skipped - connection not ready");
-        setEntities([]);
-        setRelationships([]);
-      } else if (error?.message?.includes("permissions") || error?.message?.includes("IAM error")) {
-        // Permission errors are already handled in graph-operations, but just in case
-        console.warn("Permission error loading graph. App will work with limited functionality.");
-        setEntities([]);
-        setRelationships([]);
-      } else {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Failed to load graph");
+
+        const data = await res.json();
+        setEntities(data.entities ?? []);
+        setRelationships(data.relationships ?? []);
+      } catch (error) {
         console.error("Error loading graph:", error);
-        // Don't throw - just set empty arrays so app can still function
         setEntities([]);
         setRelationships([]);
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
-    }
-  }, [setEntities, setRelationships, setLoading]);
+    },
+    [setEntities, setRelationships, setLoading]
+  );
+
+  /* ===============================
+     ENTITY OPERATIONS
+     =============================== */
 
   const createEntity = useCallback(
     async (entity: Omit<Entity, "id" | "createdAt" | "updatedAt">) => {
       setLoading(true);
       try {
-        const created = await graphOps.createEntity(entity);
+        const res = await fetch("/api/entities", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(entity),
+        });
+
+        if (!res.ok) throw new Error("Failed to create entity");
+
+        const created = await res.json();
         addEntity(created);
         return created;
-      } catch (error) {
-        console.error("Error creating entity:", error);
-        throw error;
       } finally {
         setLoading(false);
       }
@@ -94,12 +85,17 @@ export function useGraph() {
     async (id: string, updates: Partial<Entity>) => {
       setLoading(true);
       try {
-        const updated = await graphOps.updateEntity(id, updates);
+        const res = await fetch(`/api/entities/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+
+        if (!res.ok) throw new Error("Failed to update entity");
+
+        const updated = await res.json();
         updateEntity(id, updated);
         return updated;
-      } catch (error) {
-        console.error("Error updating entity:", error);
-        throw error;
       } finally {
         setLoading(false);
       }
@@ -111,17 +107,19 @@ export function useGraph() {
     async (id: string) => {
       setLoading(true);
       try {
-        await graphOps.deleteEntity(id);
+        const res = await fetch(`/api/entities/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("Failed to delete entity");
         deleteEntity(id);
-      } catch (error) {
-        console.error("Error deleting entity:", error);
-        throw error;
       } finally {
         setLoading(false);
       }
     },
     [deleteEntity, setLoading]
   );
+
+  /* ===============================
+     RELATIONSHIP OPERATIONS
+     =============================== */
 
   const createRelationship = useCallback(
     async (
@@ -134,19 +132,24 @@ export function useGraph() {
     ) => {
       setLoading(true);
       try {
-        const created = await graphOps.createRelationship(
-          from,
-          to,
-          type,
-          properties,
-          confidence,
-          source
-        );
+        const res = await fetch("/api/relationships", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from,
+            to,
+            type,
+            properties,
+            confidence,
+            source,
+          }),
+        });
+
+        if (!res.ok) throw new Error("Failed to create relationship");
+
+        const created = await res.json();
         addRelationship(created);
         return created;
-      } catch (error) {
-        console.error("Error creating relationship:", error);
-        throw error;
       } finally {
         setLoading(false);
       }
@@ -158,13 +161,17 @@ export function useGraph() {
     async (id: string, updates: Partial<Relationship>) => {
       setLoading(true);
       try {
-        const updated = await graphOps.updateRelationship(id, updates);
-        // Update relationship in store
+        const res = await fetch(`/api/relationships/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+
+        if (!res.ok) throw new Error("Failed to update relationship");
+
+        const updated = await res.json();
         updateRelationshipInStore(id, updated);
         return updated;
-      } catch (error) {
-        console.error("Error updating relationship:", error);
-        throw error;
       } finally {
         setLoading(false);
       }
@@ -172,31 +179,16 @@ export function useGraph() {
     [updateRelationshipInStore, setLoading]
   );
 
-  const getRelationshipById = useCallback(
-    async (id: string): Promise<Relationship | null> => {
-      setLoading(true);
-      try {
-        const relationship = await graphOps.getRelationship(id);
-        return relationship;
-      } catch (error) {
-        console.error("Error getting relationship:", error);
-        throw error;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [setLoading]
-  );
-
   const removeRelationship = useCallback(
     async (id: string) => {
       setLoading(true);
       try {
-        await graphOps.deleteRelationship(id);
+        const res = await fetch(`/api/relationships/${id}`, {
+          method: "DELETE",
+        });
+
+        if (!res.ok) throw new Error("Failed to delete relationship");
         deleteRelationship(id);
-      } catch (error) {
-        console.error("Error deleting relationship:", error);
-        throw error;
       } finally {
         setLoading(false);
       }
@@ -204,15 +196,17 @@ export function useGraph() {
     [deleteRelationship, setLoading]
   );
 
+  /* ===============================
+     QUERY HELPERS
+     =============================== */
+
   const searchEntities = useCallback(
     async (query: string) => {
       setLoading(true);
       try {
-        const results = await graphOps.searchEntities(query);
-        return results;
-      } catch (error) {
-        console.error("Error searching entities:", error);
-        throw error;
+        const res = await fetch(`/api/entities/search?q=${query}`);
+        if (!res.ok) throw new Error("Search failed");
+        return await res.json();
       } finally {
         setLoading(false);
       }
@@ -224,11 +218,11 @@ export function useGraph() {
     async (entityId: string, depth: number = 1) => {
       setLoading(true);
       try {
-        const result = await graphOps.getNeighbors(entityId, depth);
-        return result;
-      } catch (error) {
-        console.error("Error getting neighbors:", error);
-        throw error;
+        const res = await fetch(
+          `/api/entities/${entityId}/neighbors?depth=${depth}`
+        );
+        if (!res.ok) throw new Error("Failed to get neighbors");
+        return await res.json();
       } finally {
         setLoading(false);
       }
@@ -236,25 +230,31 @@ export function useGraph() {
     [setLoading]
   );
 
+  /* ===============================
+     PUBLIC API
+     =============================== */
+
   return {
     // State
     entities: Array.from(entities.values()),
     relationships,
     selectedEntity,
     selectedRelationship,
+
     // Actions
     loadGraph,
     createEntity,
     updateEntity: updateEntityById,
     deleteEntity: removeEntity,
+
     createRelationship,
     updateRelationship: updateRelationshipById,
     deleteRelationship: removeRelationship,
-    getRelationship: getRelationshipById,
+
     searchEntities,
     getNeighbors,
+
     selectEntity: setSelectedEntity,
     selectRelationship: setSelectedRelationship,
   };
 }
-

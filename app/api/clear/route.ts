@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { graphOps } from "@/services/graph-operations";
-import { surrealDB } from "@/lib/surrealdb-client";
+import { graph } from "@/services/graph";
 
 // Ensure this route only runs on the server
 export const runtime = "nodejs";
@@ -8,16 +7,14 @@ export const dynamic = "force-dynamic";
 
 /**
  * DELETE /api/clear
- * Clears all data from the database (entities, relationships, and documents)
- * WARNING: This permanently deletes all data!
+ * Clears all data from the active graph database
+ * (SurrealDB or Cosmos Gremlin)
+ *
+ * ⚠️ WARNING: This permanently deletes all data!
  */
-export async function DELETE(request: NextRequest) {
+export async function DELETE(_: NextRequest) {
   try {
-    // Ensure database connection
-    await surrealDB.connect();
-
-    // Clear all data
-    const result = await graphOps.clearAllData();
+    const result = await graph.clearAllData();
 
     return NextResponse.json({
       success: true,
@@ -25,11 +22,12 @@ export async function DELETE(request: NextRequest) {
       deleted: result,
     });
   } catch (error: any) {
-    console.error("Error clearing database:", error);
+    console.error("Error clearing graph data:", error);
+
     return NextResponse.json(
       {
         success: false,
-        error: error.message || "Failed to clear database",
+        error: error?.message ?? "Failed to clear graph data",
       },
       { status: 500 }
     );
@@ -37,10 +35,9 @@ export async function DELETE(request: NextRequest) {
 }
 
 /**
- * POST /api/clear (alternative method)
- * Same as DELETE but using POST method
+ * POST /api/clear
+ * Alias for DELETE (useful for clients that can't send DELETE)
  */
 export async function POST(request: NextRequest) {
   return DELETE(request);
 }
-

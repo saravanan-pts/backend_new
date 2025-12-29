@@ -1,5 +1,5 @@
 import { azureOpenAI } from "./azure-openai";
-import { graphOps } from "./graph-operations";
+import { graph} from "./graph";
 import type {
   EntityExtractionResult,
   ExtractedEntity,
@@ -43,7 +43,7 @@ export class DocumentProcessor {
     );
 
     // Create document record
-    const document = await graphOps.createDocument({
+    const document = await graph.createDocument({
       filename,
       content: text,
       fileType: "text",
@@ -143,7 +143,7 @@ export class DocumentProcessor {
             merged.entities = [...merged.entities, ...entities];
 
             // Create document
-            const document = await graphOps.createDocument({
+            const document = await graph.createDocument({
               filename: file.name,
               content: text,
               fileType: "csv",
@@ -332,7 +332,7 @@ export class DocumentProcessor {
     for (const extracted of extractedEntities) {
       try {
         // Check if entity already exists by label
-        const existing = await graphOps.searchEntities(extracted.label);
+        const existing = await graph.searchEntities(extracted.label);
         let entity: Entity;
 
         if (existing.length > 0) {
@@ -340,7 +340,7 @@ export class DocumentProcessor {
           entity = existing[0];
         } else {
           // Create new entity
-          entity = await graphOps.createEntity({
+          entity = await graph.createEntity({
             type: extracted.type,
             label: extracted.label,
             properties: extracted.properties || {},
@@ -399,7 +399,7 @@ export class DocumentProcessor {
           continue;
         }
 
-        const relationship = await graphOps.createRelationship(
+        const relationship = await graph.createRelationship(
           fromEntity.id,
           toEntity.id,
           extracted.type,
