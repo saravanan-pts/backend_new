@@ -1,13 +1,38 @@
-# Dependencies
-node_modules/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
 
-# Next.js
-.next/
-out/
+# Virtual environment
+fastapi-env/
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+.env.*
+
+# FastAPI / Uvicorn
+*.log
+
+# IDEs & editors
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build
 build/
 dist/
+*.egg-info/
 
-# Documentation
-docs/
-
-.env.local
+# SQLite / DB files
+*.db

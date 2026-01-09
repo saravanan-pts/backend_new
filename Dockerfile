@@ -1,64 +1,28 @@
-# Stage 1: Dependencies
-FROM node:20-alpine AS deps
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copy package files
-COPY package.json package-lock.json* ./
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-RUN npm ci
+COPY requirements.txt .
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Builder
-FROM node:20-alpine AS builder
-WORKDIR /app
+# Copy entire app folder including config.py
+COPY app ./app
 
-# Copy dependencies from deps stage
-COPY --from=deps /app/node_modules ./node_modules
+# Optional if you want README inside container
+COPY README.md .
 
-# Copy application code
-COPY . .
+EXPOSE 8000
 
-# Set environment variables for build (Next.js needs these)
-ENV NEXT_TELEMETRY_DISABLED=1
-ENV NODE_ENV=production
-
-# Build the application
-RUN npm run build
-
-# Stage 3: Runner
-FROM node:20-alpine AS runner
-WORKDIR /app
-
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-
-# Create a non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Copy necessary files from builder
-# Create public directory first (Next.js may not have public assets)
-RUN mkdir -p ./public
-# Copy public directory if it exists (use shell to handle empty/missing dir)
-RUN --mount=from=builder,source=/app,target=/tmp/builder \
-    if [ -d /tmp/builder/public ] && [ -n "$(ls -A /tmp/builder/public 2>/dev/null)" ]; then \
-      cp -r /tmp/builder/public/* ./public/; \
-    fi
-# Copy standalone build output
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-
-# Set ownership
-RUN chown -R nextjs:nodejs /app
-
-# Switch to non-root user
-USER nextjs
-
-# Expose port (defaults to 3000, can be overridden via PORT env var)
-EXPOSE 3000
-
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-# Start the application
-CMD ["node", "server.js"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
