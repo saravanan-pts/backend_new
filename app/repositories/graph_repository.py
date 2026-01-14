@@ -86,6 +86,15 @@ class GraphRepository:
             logger.error("Unexpected error upserting entity '%s': %s", entity_id, exc)
             raise exc
 
+    def delete_entity(self, entity_id: str) -> None:
+        """Delete a vertex and its associated edges."""
+        try:
+            self.client.submit("g.V(id).drop()", bindings={"id": entity_id}).all().result()
+            logger.info("Deleted entity: %s", entity_id)
+        except Exception as exc:
+            logger.error("Failed to delete entity %s: %s", entity_id, exc)
+            raise exc
+
     def create_relationship(
         self,
         from_id: str,
@@ -190,6 +199,79 @@ class GraphRepository:
             "entities": self.get_entities(),
             "relationships": self.get_relationships(),
         }
+
+    # ---------------------------------------------------------
+    # NEW: Advanced Read Operations for api/graph/fetch
+    # ---------------------------------------------------------
+
+    def fetch_combined_graph(self, limit: int = 500, types: List[str] = None) -> Dict[str, Any]:
+        """
+        Unified fetch for graph visualization.
+        Returns format: { "nodes": [...], "edges": [...], "meta": {...} }
+        """
+        try:
+            # 1. Build Node Query
+            node_query = "g.V()"
+            if types:
+                node_query += f".hasLabel(within({types}))"
+            node_query += f".limit({limit}).valueMap(true)"
+
+            # 2. Build Edge Query (fetch edges connecting visible nodes)
+            edge_query = "g.E().limit(limit * 2).project('id','label','source','target','properties').by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+
+            raw_nodes = self.client.submit(node_query).all().result()
+            raw_edges = self.client.submit(edge_query, bindings={"limit": limit}).all().result()
+
+            return {
+                "nodes": raw_nodes,
+                "edges": raw_edges,
+                "meta": {
+                    "count": {"nodes": len(raw_nodes), "edges": len(raw_edges)}
+                }
+            }
+        except Exception as exc:
+            logger.error("Failed to fetch combined graph: %s", exc)
+            raise exc
+
+    def search_nodes(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search nodes by label or property values containing keyword."""
+        try:
+            # Simple keyword search across labels
+            query = f"g.V().hasLabel(containing('{keyword}')).limit({limit}).valueMap(true)"
+            return self.client.submit(query).all().result()
+        except Exception as exc:
+            logger.error("Search failed for '%s': %s", keyword, exc)
+            raise exc
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get summary metrics for graph dashboard."""
+        try:
+            total_nodes = self.client.submit("g.V().count()").all().result()[0]
+            total_edges = self.client.submit("g.E().count()").all().result()[0]
+            
+            node_types = self.client.submit("g.V().groupCount().by(label)").all().result()
+            edge_types = self.client.submit("g.E().groupCount().by(label)").all().result()
+
+            return {
+                "nodes": total_nodes,
+                "edges": total_edges,
+                "nodeTypes": node_types[0] if node_types else {},
+                "edgeTypes": edge_types[0] if edge_types else {}
+            }
+        except Exception as exc:
+            logger.error("Failed to get stats: %s", exc)
+            raise exc
+
+    def delete_data_by_filename(self, filename: str) -> None:
+        """Delete all vertices and edges associated with a specific file."""
+        try:
+            # Delete vertices (and their edges) tagged with this filename
+            query = "g.V().has('sourceDocumentId', filename).drop()"
+            self.client.submit(query, bindings={"filename": filename}).all().result()
+            logger.info("Cleared graph data for document: %s", filename)
+        except Exception as exc:
+            logger.error("Failed to clear document data for %s: %s", filename, exc)
+            raise exc
 
     # -------------------------
     # Utility operations

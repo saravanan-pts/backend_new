@@ -11,6 +11,9 @@ from app.api.process import router as process_router
 from app.api.clear import router as clear_router
 from app.api.entities import router as entities_router
 from app.api.relationships import router as relationships_router
+# NEW: Import the new routers
+from app.api.graph import router as graph_router
+from app.api.documents import router as docs_router
 
 
 def create_app() -> FastAPI:
@@ -35,6 +38,11 @@ def create_app() -> FastAPI:
     app.include_router(clear_router, prefix="/clear", tags=["Clear"])
     app.include_router(entities_router, prefix="/entities", tags=["Entities"])
     app.include_router(relationships_router, prefix="/relationships", tags=["Relationships"])
+    
+    # NEW: Register the Magic Map and Library Logbook controllers
+    # The prefixes (/api/graph and /api/documents) are already set inside the files
+    app.include_router(graph_router)
+    app.include_router(docs_router)
 
     return app
 

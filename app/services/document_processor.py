@@ -16,7 +16,7 @@ class DocumentProcessor:
     - parse input
     - chunk text
     - extract entities & relationships via LLM
-    - persist graph via GraphService
+    - persist graph via GraphService (tagged with sourceDocumentId)
     """
     def __init__(self):
         self.graph_service = GraphService()
@@ -24,14 +24,6 @@ class DocumentProcessor:
     def _csv_to_narrative(self, df: pd.DataFrame) -> str:
         """
         Convert CSV DataFrame to narrative text that's easier for LLM to extract entities from.
-        
-        Example:
-        Input CSV:
-            Name, Role, Company
-            John, Engineer, TechCorp
-            
-        Output:
-            "John is an Engineer at TechCorp."
         """
         narratives = []
         
@@ -82,8 +74,31 @@ class DocumentProcessor:
                 sanitized[key] = str(value)
         return sanitized
 
-    async def process_text(self, text: str) -> Dict[str, Any]:
-        logger.info("Processing text input")
+    async def process_text(self, text: str, filename: str = "raw_text") -> Dict[str, Any]:
+        """
+        Processes text and tags all extracted data with a sourceDocumentId.
+        """
+        logger.info("Processing text input for file: %s", filename)
+        
+        # ---- NEW: Metadata Tracking ----
+        # 1. Create a unique ID for this specific document record (The "Instruction Book ID")
+        timestamp = int(pd.Timestamp.now().timestamp())
+        doc_id = f"doc_{filename.replace('.', '_')}_{timestamp}"
+
+        # 2. Create the 'Document' node first so we have a record of this upload
+        doc_node = [{
+            "id": doc_id,
+            "label": "Document",
+            "properties": {
+                "filename": filename,
+                "processed_at": str(pd.Timestamp.now()),
+                "pk": "Document"  # Partition key for document metadata
+            }
+        }]
+        # Save the metadata node immediately
+        await run_in_threadpool(self.graph_service.add_entities, doc_node)
+
+        # ---- Extraction Pipeline ----
         chunks = chunk_text(text)
         extracted_entities: List[Dict[str, Any]] = []
         extracted_relationships: List[Dict[str, Any]] = []
@@ -94,11 +109,14 @@ class DocumentProcessor:
             extracted_entities.extend(result.get("entities", []))
             extracted_relationships.extend(result.get("relationships", []))
 
-        # ---- Normalize entities for graph service ----
+        # ---- Normalize and TAG entities ----
         entities = []
         for ent in extracted_entities:
             # Sanitize properties to ensure only primitives
             sanitized_props = self._sanitize_properties(ent.get("properties", {}))
+            
+            # NEW: Add the source tag so we know which file this node came from
+            sanitized_props["sourceDocumentId"] = doc_id 
             
             entities.append(
                 {
@@ -108,16 +126,21 @@ class DocumentProcessor:
                 }
             )
 
+        # ---- Normalize and TAG relationships ----
         relationships = []
         for rel in extracted_relationships:
+            # NEW: Tag the relationship properties as well
+            rel_props = {
+                "confidence": rel.get("confidence"),
+                "sourceDocumentId": doc_id
+            }
+            
             relationships.append(
                 {
                     "from": rel["from"].lower().replace(" ", "_"),
                     "to": rel["to"].lower().replace(" ", "_"),
                     "label": rel["type"],
-                    "properties": {
-                        "confidence": rel.get("confidence")
-                    },
+                    "properties": rel_props,
                 }
             )
 
@@ -130,13 +153,14 @@ class DocumentProcessor:
         return {
             "entities_added": len(entities),
             "relationships_added": len(relationships),
+            "document_id": doc_id
         }
 
     async def process_file(self, file: UploadFile) -> Dict[str, Any]:
-        filename = file.filename.lower()
+        filename = file.filename
         logger.info("Processing file: %s", filename)
 
-        if filename.endswith(".csv"):
+        if filename.lower().endswith(".csv"):
             # Read CSV into DataFrame
             df = pd.read_csv(file.file)
             
@@ -147,7 +171,8 @@ class DocumentProcessor:
             # Plain text file
             text = (await file.read()).decode("utf-8")
 
-        return await self.process_text(text)
+        # Pass the filename down so we can create the metadata tag
+        return await self.process_text(text, filename=filename)
 
 
 # ---- Singleton ----
