@@ -28,9 +28,9 @@ deploy_aks:
   before_script:
     - tdnf install -y unzip
     - curl -LO "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
-    # FIXED: Added -o flag to overwrite without prompting
-    - unzip -o "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
-    - mv terraform /usr/local/bin/
+    # FIXED: Extracting to /tmp folder to avoid collision with the 'terraform' directory in your repo
+    - unzip -o "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /tmp
+    - mv /tmp/terraform /usr/local/bin/
     - rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
   script:
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
