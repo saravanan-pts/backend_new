@@ -10,7 +10,6 @@ terraform {
 
 provider "kubernetes" {}
 
-# Variable Definitions
 variable "container_image" { type = string }
 variable "openai_endpoint" { type = string }
 variable "openai_key" { type = string; sensitive = true }

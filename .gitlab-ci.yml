@@ -13,6 +13,7 @@ variables:
   AZURE_RESOURCE_GROUP: "rg-irmai-uat-us-1"
   IMAGE_NAME: "irmai-kg-backend"
   TF_STATE_KEY: "irmai-kg-backend.tfstate"
+  TERRAFORM_VERSION: "1.12.2"
 
 build_image:
   stage: build
@@ -25,17 +26,14 @@ deploy_aks:
   stage: deploy
   image: mcr.microsoft.com/azure-cli:latest
   before_script:
-    # Install Terraform into the Azure CLI container
-    # Since mcr.microsoft.com/azure-cli is based on Mariner/Azure Linux, we use tdnf
-    - tdnf install -y terraform
+    - tdnf install -y unzip
+    - curl -LO "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+    - unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+    - mv terraform /usr/local/bin/
+    - rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
   script:
-    # 1. Login to Azure
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
-    
-    # 2. Get AKS credentials to allow Terraform to talk to the cluster
     - az aks get-credentials --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_AKS_CLUSTER" --admin
-    
-    # 3. Deploy using Terraform
     - cd terraform
     - terraform init -backend-config="key=$TF_STATE_KEY"
     - terraform apply -auto-approve \
