@@ -17,15 +17,12 @@ variables:
 build_image:
   stage: build
   image: mcr.microsoft.com/azure-cli:latest
-  # NOTE: 'services' and 'apk/tdnf' are no longer needed!
   script:
     - echo "Checking Azure Client ID... ${AZURE_CLIENT_ID:?Variable is empty}"
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
     
-    # PRO TIP: This one command builds, tags, and pushes your image in the cloud
-    - az acr build --registry "$AZURE_ACR_NAME" \
-        --image "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" \
-        --image "$IMAGE_NAME:latest" .
+    # FIXED: Combined into a single line to avoid "unrecognized arguments" error
+    - az acr build --registry "$AZURE_ACR_NAME" --image "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" --image "$IMAGE_NAME:latest" .
 
 deploy_aks:
   stage: deploy
