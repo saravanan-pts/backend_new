@@ -2,16 +2,18 @@ stages:
   - build
   - deploy
 
+# FIXED: Moved id_tokens under 'default' so GitLab recognizes it as a keyword
+default:
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: api://AzureADTokenExchange
+
 variables:
   AZURE_ACR_NAME: "irmaiuatregistry"
   AZURE_AKS_CLUSTER: "rg-irmai-uat-us-1-cluster"
   AZURE_RESOURCE_GROUP: "rg-irmai-uat-us-1"
   IMAGE_NAME: "irmai-kg-backend"
   TF_STATE_KEY: "irmai-kg-backend.tfstate"
-
-id_tokens:
-  GITLAB_OIDC_TOKEN:
-    aud: api://AzureADTokenExchange
 
 build_image:
   stage: build
