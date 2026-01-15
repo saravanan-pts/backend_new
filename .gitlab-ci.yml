@@ -2,7 +2,7 @@ stages:
   - build
   - deploy
 
-# FIXED: Moved id_tokens under 'default' so GitLab recognizes it as a keyword
+# Global OIDC token configuration
 default:
   id_tokens:
     GITLAB_OIDC_TOKEN:
@@ -17,7 +17,8 @@ variables:
 
 build_image:
   stage: build
-  image: docker:24.0.5
+  # UPDATED: Use the official Azure CLI image so the 'az' command is available
+  image: mcr.microsoft.com/azure-cli:latest
   services:
     - docker:24.0.5-dind
   script:
