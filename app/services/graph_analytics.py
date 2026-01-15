@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Set
 from datetime import datetime
 
 from app.repositories.graph_repository import GraphRepository
-# Use the existing OpenAI client from your extractor
+# Ensure these imports match your existing OpenAI configuration
 from app.services.openai_extractor import client as openai_client, AZURE_OPENAI_DEPLOYMENT
 
 logger = logging.getLogger(__name__)
@@ -46,21 +46,32 @@ class GraphAnalytics:
             "new_community_nodes": communities_created
         }
 
-    async def _generate_community_summary(self, cluster_id: str, entity_ids: str[]) -> str:
+    async def _generate_community_summary(self, cluster_id: str, entity_ids: List[str]) -> str:
         """Fetch group data, ask AI for a theme, and save as a Community node."""
         try:
-            # Fetch the actual labels/content for these entities using Gremlin
+            # 1. Fetch labels/content for entities using Gremlin
+            # Format IDs as a comma-separated string of quoted IDs
             id_list = [f"'{eid}'" for eid in entity_ids]
             query = f"g.V({','.join(id_list)}).valueMap(true)"
+            
+            # Use submit().all().result() which is the standard for gremlin-python driver
             entity_data = self.repo.client.submit(query).all().result()
             
             if not entity_data:
                 return None
 
-            # Format context for AI
-            context_text = "\n".join([f"{e.get('label', 'Unknown')}: {json.dumps(e)}" for e in entity_data])
+            # 2. Format context for AI
+            # Handle Gremlin valueMap structure where values are typically lists: {'name': ['Alice']}
+            context_items = []
+            for e in entity_data:
+                # Extract label and content safely
+                label = e.get('label', 'Unknown')
+                if isinstance(label, list): label = label[0]
+                context_items.append(f"{label}: {json.dumps(e)}")
+            
+            context_text = "\n".join(context_items)
 
-            # Ask AI to summarize this "Community"
+            # 3. Ask AI to summarize this "Community"
             prompt = f"""
             You are analyzing a 'Community' detected in a Knowledge Graph.
             
@@ -75,6 +86,7 @@ class GraphAnalytics:
             Return ONLY valid JSON: {{ "theme": "...", "summary": "...", "label": "..." }}
             """
 
+            # Updated for OpenAI v1.0+ async client
             response = await openai_client.chat.completions.create(
                 model=AZURE_OPENAI_DEPLOYMENT,
                 messages=[{"role": "user", "content": prompt}],
@@ -91,13 +103,13 @@ class GraphAnalytics:
                 "theme": result.get("theme", ""),
                 "summary": result.get("summary", ""),
                 "member_count": len(entity_ids),
-                "generated_at": str(datetime.now()),
+                "generated_at": datetime.now().isoformat(),
                 "pk": "Community"
             }
             
             self.repo.create_entity(community_id, "Community", community_props)
 
-            # Link members to the Community
+            # 5. Link members to the Community
             for member_id in entity_ids:
                 self.repo.create_relationship(member_id, community_id, "BELONGS_TO", {"confidence": 1.0})
 
@@ -144,8 +156,7 @@ class GraphAnalytics:
         return {k: list(v) for k, v in clusters.items()}
 
     async def find_shortest_path(self, source_id: str, target_id: str):
-        """Finds the quickest road between two Lego houses."""
-        # FIXED: Changed execute_query to the standard submit().all().result()
+        """Finds the quickest road between two entities."""
         query = f"g.V('{source_id}').repeat(out().simplePath()).until(hasId('{target_id}')).path().limit(1)"
         try:
             result = self.repo.client.submit(query).all().result()
