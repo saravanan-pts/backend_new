@@ -2,7 +2,6 @@ stages:
   - build
   - deploy
 
-# Global OIDC token configuration
 default:
   id_tokens:
     GITLAB_OIDC_TOKEN:
@@ -17,22 +16,26 @@ variables:
 
 build_image:
   stage: build
-  # UPDATED: Use the official Azure CLI image so the 'az' command is available
   image: mcr.microsoft.com/azure-cli:latest
   services:
     - docker:24.0.5-dind
   script:
-    - az login --service-principal -u $AZURE_CLIENT_ID -t $AZURE_TENANT_ID --federated-token $GITLAB_OIDC_TOKEN
-    - az acr login --name $AZURE_ACR_NAME
-    - docker build -t $AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA -t $AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:latest .
-    - docker push --all-tags $AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME
+    # DEBUG: Check if variables are reaching the runner (values will be masked as [MASKED])
+    - echo "Checking Azure Client ID... ${AZURE_CLIENT_ID:?Variable is empty}"
+    - echo "Checking Azure Tenant ID... ${AZURE_TENANT_ID:?Variable is empty}"
+    
+    # FIXED: Use quotes to handle potential empty strings or special characters
+    - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
+    - az acr login --name "$AZURE_ACR_NAME"
+    - docker build -t "$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" -t "$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:latest" .
+    - docker push --all-tags "$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME"
 
 deploy_aks:
   stage: deploy
   image: hashicorp/terraform:light
   script:
-    - az login --service-principal -u $AZURE_CLIENT_ID -t $AZURE_TENANT_ID --federated-token $GITLAB_OIDC_TOKEN
-    - az aks get-credentials --resource-group $AZURE_RESOURCE_GROUP --name $AZURE_AKS_CLUSTER --admin
+    - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
+    - az aks get-credentials --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_AKS_CLUSTER" --admin
     - cd terraform
     - terraform init -backend-config="key=$TF_STATE_KEY"
     - terraform apply -auto-approve \
