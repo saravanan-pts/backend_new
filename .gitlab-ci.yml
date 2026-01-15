@@ -17,21 +17,15 @@ variables:
 build_image:
   stage: build
   image: mcr.microsoft.com/azure-cli:latest
-  services:
-    - docker:24.0.5-dind
+  # NOTE: 'services' and 'apk/tdnf' are no longer needed!
   script:
-    # 1. Install Docker client (This fixes the DOCKER_COMMAND_ERROR)
-    - apk add --no-cache docker-cli
-    
-    # 2. Login to Azure using OIDC
+    - echo "Checking Azure Client ID... ${AZURE_CLIENT_ID:?Variable is empty}"
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
     
-    # 3. Login to ACR (Now works because docker-cli is installed)
-    - az acr login --name "$AZURE_ACR_NAME"
-    
-    # 4. Build and Push
-    - docker build -t "$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" -t "$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:latest" .
-    - docker push --all-tags "$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME"
+    # PRO TIP: This one command builds, tags, and pushes your image in the cloud
+    - az acr build --registry "$AZURE_ACR_NAME" \
+        --image "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" \
+        --image "$IMAGE_NAME:latest" .
 
 deploy_aks:
   stage: deploy
