@@ -11,8 +11,12 @@ variables:
   AZURE_ACR_NAME: "irmaiuatregistry"
   AZURE_AKS_CLUSTER: "rg-irmai-uat-us-1-cluster"
   AZURE_RESOURCE_GROUP: "rg-irmai-uat-us-1"
-  IMAGE_NAME: "irmai-kg-backend"
+  # Backend Storage Config (Required for terraform init)
+  TF_STATE_RG: "rg-irmai-uat-us-1"
+  TF_STATE_STORAGE_ACCOUNT: "stirmaiuatus1"
+  TF_STATE_CONTAINER: "tfstate"
   TF_STATE_KEY: "irmai-kg-backend.tfstate"
+  IMAGE_NAME: "irmai-kg-backend"
   TERRAFORM_VERSION: "1.12.2"
 
 build_image:
@@ -28,7 +32,6 @@ deploy_aks:
   before_script:
     - tdnf install -y unzip
     - curl -LO "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
-    # FIXED: Extracting to /tmp folder to avoid collision with the 'terraform' directory in your repo
     - unzip -o "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /tmp
     - mv /tmp/terraform /usr/local/bin/
     - rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
@@ -36,7 +39,12 @@ deploy_aks:
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
     - az aks get-credentials --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_AKS_CLUSTER" --admin
     - cd terraform
-    - terraform init -backend-config="key=$TF_STATE_KEY"
+    # FIXED: Added required storage account and container name for backend initialization
+    - terraform init \
+        -backend-config="resource_group_name=$TF_STATE_RG" \
+        -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" \
+        -backend-config="container_name=$TF_STATE_CONTAINER" \
+        -backend-config="key=$TF_STATE_KEY"
     - terraform apply -auto-approve \
         -var="container_image=$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" \
         -var="openai_endpoint=$AZURE_OPENAI_ENDPOINT" \
