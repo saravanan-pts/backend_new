@@ -1,41 +1,14 @@
-# -------------------------
-# Core API
-# -------------------------
 fastapi
 uvicorn[standard]
-
-# -------------------------
-# Environment
-# -------------------------
 python-dotenv
-
-# -------------------------
-# Azure / OpenAI
-# -------------------------
 openai
 azure-cosmos
-
-# -------------------------
-# Gremlin / Cosmos Graph
-# -------------------------
 gremlinpython>=3.6.0
 websockets>=10.4
 aiohttp>=3.8.0
-
-# -------------------------
-# Validation
-# -------------------------
 pydantic
 pydantic-settings
-
-# -------------------------
-# File uploads
-# -------------------------
 python-multipart
-
-# -------------------------
-# File processing
-# -------------------------
 pdfplumber
 mammoth
 pandas

@@ -17,10 +17,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy entire app folder including config.py
 COPY app ./app
-
-# Optional if you want README inside container
 COPY README.md .
 
 EXPOSE 8000

@@ -1,0 +1,39 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  AZURE_ACR_NAME: "irmaiuatregistry"
+  AZURE_AKS_CLUSTER: "rg-irmai-uat-us-1-cluster"
+  AZURE_RESOURCE_GROUP: "rg-irmai-uat-us-1"
+  IMAGE_NAME: "irmai-kg-backend"
+  TF_STATE_KEY: "irmai-kg-backend.tfstate"
+
+# Request OIDC token from GitLab
+id_tokens:
+  GITLAB_OIDC_TOKEN:
+    aud: api://AzureADTokenExchange
+
+build_image:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  script:
+    - az login --service-principal -u $AZURE_CLIENT_ID -t $AZURE_TENANT_ID --federated-token $GITLAB_OIDC_TOKEN
+    - az acr login --name $AZURE_ACR_NAME
+    - docker build -t $AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA -t $AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:latest .
+    - docker push --all-tags $AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME
+
+deploy_aks:
+  stage: deploy
+  image: hashicorp/terraform:light
+  script:
+    - az login --service-principal -u $AZURE_CLIENT_ID -t $AZURE_TENANT_ID --federated-token $GITLAB_OIDC_TOKEN
+    - az aks get-credentials --resource-group $AZURE_RESOURCE_GROUP --name $AZURE_AKS_CLUSTER --admin
+    - cd terraform
+    - terraform init -backend-config="key=$TF_STATE_KEY"
+    - terraform apply -auto-approve \
+        -var="container_image=$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" \
+        -var="openai_key=$AZURE_OPENAI_API_KEY" \
+        -var="cosmos_key=$COSMOS_GREMLIN_KEY"
