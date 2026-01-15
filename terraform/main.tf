@@ -10,6 +10,7 @@ terraform {
 
 provider "kubernetes" {}
 
+# --- Variables ---
 variable "container_image" { type = string }
 variable "openai_endpoint" { type = string }
 variable "openai_key" { 
@@ -28,6 +29,7 @@ variable "cosmos_key" {
   sensitive = true 
 }
 
+# --- Deployment ---
 resource "kubernetes_deployment" "backend" {
   metadata {
     name   = "irmai-kg-backend"
@@ -90,6 +92,7 @@ resource "kubernetes_deployment" "backend" {
   }
 }
 
+# --- LoadBalancer Service ---
 resource "kubernetes_service" "backend" {
   metadata { name = "irmai-kg-backend-svc" }
   spec {

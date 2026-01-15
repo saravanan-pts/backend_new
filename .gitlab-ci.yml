@@ -11,12 +11,10 @@ variables:
   AZURE_ACR_NAME: "irmaiuatregistry"
   AZURE_AKS_CLUSTER: "rg-irmai-uat-us-1-cluster"
   AZURE_RESOURCE_GROUP: "rg-irmai-uat-us-1"
-  # --- STORAGE CONFIGURATION ---
   TF_STATE_RG: "rg-irmai-uat-us-1"
   TF_STATE_STORAGE_ACCOUNT: "irmaiuatstorage" 
   TF_STATE_CONTAINER: "tfstate"
   TF_STATE_KEY: "irmai-kg-backend.tfstate"
-  # ------------------------------
   IMAGE_NAME: "irmai-kg-backend"
   TERRAFORM_VERSION: "1.12.2"
 
@@ -40,5 +38,6 @@ deploy_aks:
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
     - az aks get-credentials --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_AKS_CLUSTER" --admin
     - cd terraform
-    - terraform init -backend-config="resource_group_name=$TF_STATE_RG" -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" -backend-config="container_name=$TF_STATE_CONTAINER" -backend-config="key=$TF_STATE_KEY"
+    # FIXED: Added use_oidc=true and use_azuread_auth=true to bypass the 403 Key Based Auth error
+    - terraform init -backend-config="resource_group_name=$TF_STATE_RG" -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" -backend-config="container_name=$TF_STATE_CONTAINER" -backend-config="key=$TF_STATE_KEY" -backend-config="use_oidc=true" -backend-config="use_azuread_auth=true"
     - terraform apply -auto-approve -var="container_image=$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" -var="openai_endpoint=$AZURE_OPENAI_ENDPOINT" -var="openai_key=$AZURE_OPENAI_API_KEY" -var="openai_deployment=$AZURE_OPENAI_DEPLOYMENT_NAME" -var="openai_embedding=$AZURE_OPENAI_EMBEDDING_MODEL" -var="openai_generation=$AZURE_OPENAI_GENERATION_MODEL" -var="openai_version=$AZURE_OPENAI_API_VERSION" -var="cosmos_endpoint=$COSMOS_GREMLIN_ENDPOINT" -var="cosmos_db=$COSMOS_GREMLIN_DATABASE" -var="cosmos_container=$COSMOS_GREMLIN_CONTAINER" -var="cosmos_key=$COSMOS_GREMLIN_KEY"
