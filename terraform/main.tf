@@ -10,7 +10,6 @@ terraform {
 
 provider "kubernetes" {}
 
-# --- Variables (Fixed: No semicolons) ---
 variable "container_image" { type = string }
 variable "openai_endpoint" { type = string }
 variable "openai_key" { 
@@ -29,7 +28,6 @@ variable "cosmos_key" {
   sensitive = true 
 }
 
-# --- Deployment (Fixed: Multi-line env blocks) ---
 resource "kubernetes_deployment" "backend" {
   metadata {
     name   = "irmai-kg-backend"
