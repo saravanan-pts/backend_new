@@ -8,9 +8,12 @@ terraform {
   backend "azurerm" {}
 }
 
-provider "kubernetes" {}
+# FIXED: Explicitly tell Terraform to use the AKS credentials downloaded by 'az aks get-credentials'
+provider "kubernetes" {
+  config_path = "~/.kube/config"
+}
 
-# --- Variables ---
+# --- Variables (No changes needed) ---
 variable "container_image" { type = string }
 variable "openai_endpoint" { type = string }
 variable "openai_key" { 
@@ -92,7 +95,7 @@ resource "kubernetes_deployment" "backend" {
   }
 }
 
-# --- LoadBalancer Service ---
+# --- Service ---
 resource "kubernetes_service" "backend" {
   metadata { name = "irmai-kg-backend-svc" }
   spec {
