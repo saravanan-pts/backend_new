@@ -28,7 +28,8 @@ deploy_aks:
   before_script:
     - tdnf install -y unzip
     - curl -LO "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
-    - unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+    # FIXED: Added -o flag to overwrite without prompting
+    - unzip -o "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
     - mv terraform /usr/local/bin/
     - rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
   script:

@@ -38,6 +38,7 @@ resource "kubernetes_deployment" "backend" {
           image = var.container_image
           port { container_port = 8000 }
           
+          # Environment variables for app/config.py
           env { name = "AZURE_OPENAI_ENDPOINT", value = var.openai_endpoint }
           env { name = "AZURE_OPENAI_API_KEY", value = var.openai_key }
           env { name = "AZURE_OPENAI_DEPLOYMENT_NAME", value = var.openai_deployment }

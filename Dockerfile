@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libglib2.0-0 libsm6 libxrender1 libxext6 \
     && rm -rf /var/lib/apt/lists/*
@@ -17,6 +18,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY app ./app
 COPY README.md .
 
+# Security: Run as non-root
 RUN useradd -m myuser && chown -R myuser /app
 USER myuser
 
