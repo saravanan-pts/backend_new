@@ -9,7 +9,6 @@ variables:
   IMAGE_NAME: "irmai-kg-backend"
   TF_STATE_KEY: "irmai-kg-backend.tfstate"
 
-# Request OIDC token from GitLab
 id_tokens:
   GITLAB_OIDC_TOKEN:
     aud: api://AzureADTokenExchange
@@ -35,5 +34,13 @@ deploy_aks:
     - terraform init -backend-config="key=$TF_STATE_KEY"
     - terraform apply -auto-approve \
         -var="container_image=$AZURE_ACR_NAME.azurecr.io/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" \
+        -var="openai_endpoint=$AZURE_OPENAI_ENDPOINT" \
         -var="openai_key=$AZURE_OPENAI_API_KEY" \
+        -var="openai_deployment=$AZURE_OPENAI_DEPLOYMENT_NAME" \
+        -var="openai_embedding=$AZURE_OPENAI_EMBEDDING_MODEL" \
+        -var="openai_generation=$AZURE_OPENAI_GENERATION_MODEL" \
+        -var="openai_version=$AZURE_OPENAI_API_VERSION" \
+        -var="cosmos_endpoint=$COSMOS_GREMLIN_ENDPOINT" \
+        -var="cosmos_db=$COSMOS_GREMLIN_DATABASE" \
+        -var="cosmos_container=$COSMOS_GREMLIN_CONTAINER" \
         -var="cosmos_key=$COSMOS_GREMLIN_KEY"
