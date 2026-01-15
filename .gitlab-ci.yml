@@ -18,18 +18,24 @@ build_image:
   stage: build
   image: mcr.microsoft.com/azure-cli:latest
   script:
-    - echo "Checking Azure Client ID... ${AZURE_CLIENT_ID:?Variable is empty}"
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
-    
-    # FIXED: Combined into a single line to avoid "unrecognized arguments" error
     - az acr build --registry "$AZURE_ACR_NAME" --image "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" --image "$IMAGE_NAME:latest" .
 
 deploy_aks:
   stage: deploy
-  image: hashicorp/terraform:light
+  image: mcr.microsoft.com/azure-cli:latest
+  before_script:
+    # Install Terraform into the Azure CLI container
+    # Since mcr.microsoft.com/azure-cli is based on Mariner/Azure Linux, we use tdnf
+    - tdnf install -y terraform
   script:
+    # 1. Login to Azure
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
+    
+    # 2. Get AKS credentials to allow Terraform to talk to the cluster
     - az aks get-credentials --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_AKS_CLUSTER" --admin
+    
+    # 3. Deploy using Terraform
     - cd terraform
     - terraform init -backend-config="key=$TF_STATE_KEY"
     - terraform apply -auto-approve \
