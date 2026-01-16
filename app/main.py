@@ -38,7 +38,7 @@ def create_app() -> FastAPI:
     # ---- Routers ----
     app.include_router(health_router, prefix="/health", tags=["Health"])
     app.include_router(process_router, prefix="/process", tags=["Process"])
-    app.include_router(clear_router, prefix="/clear", tags=["Clear"])
+    app.include_router(clear_router)
     app.include_router(entities_router, prefix="/entities", tags=["Entities"])
     app.include_router(relationships_router, prefix="/relationships", tags=["Relationships"])
     
