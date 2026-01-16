@@ -23,9 +23,9 @@ class GraphRepository:
         """Delete all vertices + edges in graph."""
         try:
             logger.info("Clearing entire graph")
-            # FIXED: Use submit_async and await result
-            result_set = await self.client.submit_async("g.V().drop()")
-            await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async("g.V().drop()").result()
+            result_set.all().result()
         except Exception as exc:
             logger.exception("Failed to clear graph")
             raise exc
@@ -38,7 +38,6 @@ class GraphRepository:
     ) -> None:
         """
         Create or update a vertex using UPSERT pattern.
-        Partition key (pk) is only set during creation, not updates.
         """
         try:
             prop_assignments = []
@@ -68,9 +67,9 @@ class GraphRepository:
             """
 
             logger.debug("Upserting entity: %s", entity_id)
-            # FIXED: Use submit_async and await result
-            result_set = await self.client.submit_async(query, bindings=bindings)
-            return await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async(query, bindings=bindings).result()
+            return result_set.all().result()
 
         except Exception as exc:
             logger.error("Failed to upsert entity '%s': %s", entity_id, exc)
@@ -79,9 +78,9 @@ class GraphRepository:
     async def delete_entity(self, entity_id: str) -> None:
         """Delete a vertex and its associated edges."""
         try:
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async("g.V(id).drop()", bindings={"id": entity_id})
-            await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async("g.V(id).drop()", bindings={"id": entity_id}).result()
+            result_set.all().result()
             logger.info("Deleted entity: %s", entity_id)
         except Exception as exc:
             logger.error("Failed to delete entity %s: %s", entity_id, exc)
@@ -122,9 +121,9 @@ class GraphRepository:
             """
 
             logger.debug("Upserting relationship: %s -> %s", from_id, to_id)
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async(query, bindings=bindings)
-            return await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async(query, bindings=bindings).result()
+            return result_set.all().result()
 
         except Exception as exc:
             logger.error("Failed to upsert relationship %s -> %s: %s", from_id, to_id, exc)
@@ -137,9 +136,9 @@ class GraphRepository:
     async def get_entities(self) -> List[Dict[str, Any]]:
         """Fetch all vertices with properties."""
         try:
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async("g.V().valueMap(true)")
-            result = await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async("g.V().valueMap(true)").result()
+            result = result_set.all().result()
             logger.info("Fetched %d entities from graph", len(result))
             return result
         except Exception as exc:
@@ -158,9 +157,9 @@ class GraphRepository:
                 ".by(inV().id())"
                 ".by(valueMap())"
             )
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async(query)
-            result = await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async(query).result()
+            result = result_set.all().result()
             logger.info("Fetched %d relationships from graph", len(result))
             return result
         except Exception as exc:
@@ -191,12 +190,12 @@ class GraphRepository:
                 ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
             )
 
-            # FIXED: Use submit_async for both
-            node_rs = await self.client.submit_async(node_query)
-            raw_nodes = await node_rs.all()
+            # FIXED: Replaced await with .result() entirely
+            node_rs = self.client.submit_async(node_query).result()
+            raw_nodes = node_rs.all().result()
 
-            edge_rs = await self.client.submit_async(edge_query, bindings={"limit_val": limit * 2})
-            raw_edges = await edge_rs.all()
+            edge_rs = self.client.submit_async(edge_query, bindings={"limit_val": limit * 2}).result()
+            raw_edges = edge_rs.all().result()
 
             return {
                 "nodes": raw_nodes,
@@ -211,9 +210,9 @@ class GraphRepository:
         """Search nodes by label containing keyword."""
         try:
             query = f"g.V().hasLabel(containing('{keyword}')).limit({limit}).valueMap(true)"
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async(query)
-            return await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async(query).result()
+            return result_set.all().result()
         except Exception as exc:
             logger.error("Search failed for '%s': %s", keyword, exc)
             raise exc
@@ -221,18 +220,18 @@ class GraphRepository:
     async def get_stats(self) -> Dict[str, Any]:
         """Get summary metrics for graph dashboard."""
         try:
-            # FIXED: Use submit_async for all count/group queries
-            n_rs = await self.client.submit_async("g.V().count()")
-            total_nodes = (await n_rs.all())[0]
+            # FIXED: Removed all awaits, used .result()
+            n_rs = self.client.submit_async("g.V().count()").result()
+            total_nodes = n_rs.all().result()[0]
 
-            e_rs = await self.client.submit_async("g.E().count()")
-            total_edges = (await e_rs.all())[0]
+            e_rs = self.client.submit_async("g.E().count()").result()
+            total_edges = e_rs.all().result()[0]
             
-            nt_rs = await self.client.submit_async("g.V().groupCount().by(label)")
-            node_types = await nt_rs.all()
+            nt_rs = self.client.submit_async("g.V().groupCount().by(label)").result()
+            node_types = nt_rs.all().result()
 
-            et_rs = await self.client.submit_async("g.E().groupCount().by(label)")
-            edge_types = await et_rs.all()
+            et_rs = self.client.submit_async("g.E().groupCount().by(label)").result()
+            edge_types = et_rs.all().result()
 
             return {
                 "nodes": total_nodes,
@@ -248,9 +247,9 @@ class GraphRepository:
         """Delete all data associated with a specific file."""
         try:
             query = "g.V().has('sourceDocumentId', filename).drop()"
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async(query, bindings={"filename": filename})
-            await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async(query, bindings={"filename": filename}).result()
+            result_set.all().result()
             logger.info("Cleared graph data for document: %s", filename)
         except Exception as exc:
             logger.error("Failed to clear document data for %s: %s", filename, exc)
@@ -263,9 +262,9 @@ class GraphRepository:
     async def entity_exists(self, entity_id: str) -> bool:
         """Check if a vertex exists by ID."""
         try:
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async("g.V(id).count()", bindings={"id": entity_id})
-            result = await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async("g.V(id).count()", bindings={"id": entity_id}).result()
+            result = result_set.all().result()
             return result[0] > 0 if result else False
         except Exception as exc:
             logger.exception("Failed to check existence for: %s", entity_id)
@@ -274,9 +273,9 @@ class GraphRepository:
     async def get_entity_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single entity by ID."""
         try:
-            # FIXED: Use submit_async
-            result_set = await self.client.submit_async("g.V(id).valueMap(true)", bindings={"id": entity_id})
-            result = await result_set.all()
+            # FIXED: .all().result()
+            result_set = self.client.submit_async("g.V(id).valueMap(true)", bindings={"id": entity_id}).result()
+            result = result_set.all().result()
             return result[0] if result else None
         except Exception as exc:
             logger.exception("Failed to fetch entity: %s", entity_id)

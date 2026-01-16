@@ -1,3 +1,6 @@
+import nest_asyncio  # <--- FIXED: Patching the loop
+nest_asyncio.apply() # <--- FIXED: Applying the patch
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
