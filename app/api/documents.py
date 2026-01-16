@@ -11,11 +11,15 @@ async def list_documents():
     GET: Lists all instruction books (Documents) in your library.
     """
     try:
-        # Standard Gremlin pattern used in your project
+        # Fixed: Changed .submit().all().result() to await submit_async()
         query = "g.V().hasLabel('Document').valueMap(true)"
-        docs = graph_service.repo.client.submit(query).all().result()
+        
+        result_set = await graph_service.repo.client.submit_async(query)
+        docs = await result_set.all()
+        
         return {"files": docs}
     except Exception as e:
+        # This will now catch actual DB errors instead of Event Loop errors
         raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
 
 @router.delete("")
@@ -29,11 +33,16 @@ async def delete_document(payload: Dict[str, Any]):
 
     try:
         # 1. Clean up all the bricks (nodes/edges) created from this file
-        graph_service.repo.delete_data_by_filename(filename)
+        # Note: Ensure delete_data_by_filename in graph_repository is also async!
+        await graph_service.repo.delete_data_by_filename(filename)
         
-        # 2. Throw the instruction book (Document node) in the trash
+        # 2. Fixed: Use await submit_async for the metadata deletion
         delete_meta_query = "g.V().hasLabel('Document').has('filename', name).drop()"
-        graph_service.repo.client.submit(delete_meta_query, bindings={"name": filename}).all().result()
+        result_set = await graph_service.repo.client.submit_async(
+            delete_meta_query, 
+            bindings={"name": filename}
+        )
+        await result_set.all()
         
         return {"status": "deleted", "filename": filename}
     except Exception as e:

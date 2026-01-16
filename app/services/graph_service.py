@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from app.repositories.graph_repository import GraphRepository
 
@@ -10,6 +10,7 @@ class GraphService:
     """
     Service layer for graph-related business logic.
     Orchestrates repositories, applies rules, and ensures consistency.
+    FIXED: All methods converted to async to prevent Event Loop conflicts.
     """
 
     def __init__(self):
@@ -19,35 +20,35 @@ class GraphService:
     # Graph lifecycle
     # -------------------------
 
-    def clear_graph(self) -> None:
+    async def clear_graph(self, scope: str = "all") -> bool:
         """
-        Clear entire graph.
-        Business decision: full reset allowed.
+        Clear graph data based on scope.
+        Scope: all | documents | entities | relationships
         """
-        logger.info("GraphService: clearing graph")
-        self.repo.clear_graph()
+        logger.info(f"GraphService: clearing graph with scope: {scope}")
+        
+        # Logic: Delegates the query generation and execution to the repo
+        # Ensure your repo.clear_graph accepts the 'scope' argument
+        result = await self.repo.clear_graph(scope)
+        return result
 
     # -------------------------
     # Entity logic
     # -------------------------
 
-    def add_entities(self, entities: List[Dict[str, Any]]) -> None:
+    async def add_entities(self, entities: List[Dict[str, Any]]) -> None:
         """
         Add multiple entities to the graph.
-
-        Expected entity format:
-        {
-            "id": "entity_id",
-            "label": "Person",
-            "properties": {...}
-        }
+        [LOGIC RETAINED]: Validates each entity before calling the repository.
         """
         logger.info("GraphService: adding %d entities", len(entities))
 
         for entity in entities:
+            # Synchronous validation logic
             self._validate_entity(entity)
 
-            self.repo.create_entity(
+            # FIXED: Await the repository call
+            await self.repo.create_entity(
                 entity_id=entity["id"],
                 label=entity["label"],
                 properties=entity.get("properties", {}),
@@ -57,17 +58,10 @@ class GraphService:
     # Relationship logic
     # -------------------------
 
-    def add_relationships(self, relationships: List[Dict[str, Any]]) -> None:
+    async def add_relationships(self, relationships: List[Dict[str, Any]]) -> None:
         """
         Add multiple relationships to the graph.
-
-        Expected relationship format:
-        {
-            "from": "entity_id",
-            "to": "entity_id",
-            "label": "RELATED_TO",
-            "properties": {...}
-        }
+        [LOGIC RETAINED]: Validates each relationship before calling the repository.
         """
         logger.info(
             "GraphService: adding %d relationships",
@@ -75,9 +69,11 @@ class GraphService:
         )
 
         for rel in relationships:
+            # Synchronous validation logic
             self._validate_relationship(rel)
 
-            self.repo.create_relationship(
+            # FIXED: Await the repository call
+            await self.repo.create_relationship(
                 from_id=rel["from"],
                 to_id=rel["to"],
                 label=rel["label"],
@@ -88,35 +84,50 @@ class GraphService:
     # Graph queries
     # -------------------------
 
-    def get_graph(self) -> Dict[str, Any]:
+    async def get_graph(self) -> Dict[str, Any]:
         """
         Fetch complete graph (entities + relationships).
         """
         logger.info("GraphService: fetching full graph")
-        return self.repo.get_graph()
+        # FIXED: Await the repository call
+        return await self.repo.get_graph()
 
-    def get_entities(self):
-        logger.info("GraphService: fetching entities")
-        return self.repo.get_entities()
+    async def get_entities(self, label: Optional[str] = None):
+        """
+        Fetch entities, optionally filtered by label.
+        """
+        logger.info(f"GraphService: fetching entities (filter: {label})")
+        # FIXED: Await the repository call
+        return await self.repo.get_entities(label=label)
 
-    def get_relationships(self):
+    async def get_relationships(self):
+        """
+        Fetch all relationships.
+        """
         logger.info("GraphService: fetching relationships")
-        return self.repo.get_relationships()
+        # FIXED: Await the repository call
+        return await self.repo.get_relationships()
+
+    async def get_relationships_for_entity(self, entity_id: str):
+        """
+        Fetch relationships specific to one entity.
+        """
+        logger.info(f"GraphService: fetching relationships for {entity_id}")
+        # FIXED: Await the repository call
+        return await self.repo.get_relationships_for_entity(entity_id)
 
     # -------------------------
-    # Internal validation rules
+    # Internal validation rules (Stay synchronous as they are pure logic)
     # -------------------------
 
     def _validate_entity(self, entity: Dict[str, Any]) -> None:
         required_fields = ["id", "label"]
-
         for field in required_fields:
             if field not in entity:
                 raise ValueError(f"Entity missing required field: {field}")
 
     def _validate_relationship(self, relationship: Dict[str, Any]) -> None:
         required_fields = ["from", "to", "label"]
-
         for field in required_fields:
             if field not in relationship:
                 raise ValueError(
@@ -124,4 +135,5 @@ class GraphService:
                 )
 
 
+# Instantiate the service singleton
 graph_service = GraphService()

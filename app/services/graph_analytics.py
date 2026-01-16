@@ -22,7 +22,8 @@ class GraphAnalytics:
         logger.info("[Analytics] Starting Community Detection...")
         
         # 1. Fetch all relationships to see the structure
-        relationships = self.repo.get_relationships()
+        # FIX: Ensure get_relationships is an async method
+        relationships = await self.repo.get_relationships()
         
         # 2. Simple Clustering (Heuristic: Connected components)
         clusters = self._simple_clustering(relationships)
@@ -50,21 +51,19 @@ class GraphAnalytics:
         """Fetch group data, ask AI for a theme, and save as a Community node."""
         try:
             # 1. Fetch labels/content for entities using Gremlin
-            # Format IDs as a comma-separated string of quoted IDs
             id_list = [f"'{eid}'" for eid in entity_ids]
             query = f"g.V({','.join(id_list)}).valueMap(true)"
             
-            # Use submit().all().result() which is the standard for gremlin-python driver
-            entity_data = self.repo.client.submit(query).all().result()
+            # FIX: Changed .submit().all().result() to await submit_async()
+            result_set = await self.repo.client.submit_async(query)
+            entity_data = await result_set.all()
             
             if not entity_data:
                 return None
 
             # 2. Format context for AI
-            # Handle Gremlin valueMap structure where values are typically lists: {'name': ['Alice']}
             context_items = []
             for e in entity_data:
-                # Extract label and content safely
                 label = e.get('label', 'Unknown')
                 if isinstance(label, list): label = label[0]
                 context_items.append(f"{label}: {json.dumps(e)}")
@@ -86,7 +85,6 @@ class GraphAnalytics:
             Return ONLY valid JSON: {{ "theme": "...", "summary": "...", "label": "..." }}
             """
 
-            # Updated for OpenAI v1.0+ async client
             response = await openai_client.chat.completions.create(
                 model=AZURE_OPENAI_DEPLOYMENT,
                 messages=[{"role": "user", "content": prompt}],
@@ -107,11 +105,12 @@ class GraphAnalytics:
                 "pk": "Community"
             }
             
-            self.repo.create_entity(community_id, "Community", community_props)
+            # FIX: Await the repository write methods
+            await self.repo.create_entity(community_id, "Community", community_props)
 
             # 5. Link members to the Community
             for member_id in entity_ids:
-                self.repo.create_relationship(member_id, community_id, "BELONGS_TO", {"confidence": 1.0})
+                await self.repo.create_relationship(member_id, community_id, "BELONGS_TO", {"confidence": 1.0})
 
             return community_id
 
@@ -120,7 +119,7 @@ class GraphAnalytics:
             return None
 
     def _simple_clustering(self, relationships: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-        """Connected Components algorithm to group IDs."""
+        """Connected Components algorithm to group IDs. (Remains sync as it is pure CPU logic)"""
         node_to_cluster = {}
         clusters = {}
         cluster_count = 0
@@ -147,7 +146,6 @@ class GraphAnalytics:
                 node_to_cluster[u] = v_clust
                 clusters[v_clust].add(u)
             elif u_clust != v_clust:
-                # Merge clusters
                 for node in clusters[v_clust]:
                     node_to_cluster[node] = u_clust
                     clusters[u_clust].add(node)
@@ -159,7 +157,9 @@ class GraphAnalytics:
         """Finds the quickest road between two entities."""
         query = f"g.V('{source_id}').repeat(out().simplePath()).until(hasId('{target_id}')).path().limit(1)"
         try:
-            result = self.repo.client.submit(query).all().result()
+            # FIX: Changed to await submit_async()
+            result_set = await self.repo.client.submit_async(query)
+            result = await result_set.all()
             return result
         except Exception as e:
             logger.error(f"Shortest path failed: {e}")

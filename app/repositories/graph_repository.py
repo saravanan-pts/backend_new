@@ -6,7 +6,6 @@ from app.db.cosmos_client import get_gremlin_client
 
 logger = logging.getLogger(__name__)
 
-
 class GraphRepository:
     """
     Repository responsible for all Gremlin DB operations.
@@ -20,16 +19,18 @@ class GraphRepository:
     # Graph write operations
     # -------------------------
 
-    def clear_graph(self) -> None:
+    async def clear_graph(self) -> None:
         """Delete all vertices + edges in graph."""
         try:
             logger.info("Clearing entire graph")
-            self.client.submit("g.V().drop()").all().result()
-        except GremlinServerError as exc:
+            # FIXED: Use submit_async and await result
+            result_set = await self.client.submit_async("g.V().drop()")
+            await result_set.all()
+        except Exception as exc:
             logger.exception("Failed to clear graph")
             raise exc
 
-    def create_entity(
+    async def create_entity(
         self,
         entity_id: str,
         label: str,
@@ -38,30 +39,22 @@ class GraphRepository:
         """
         Create or update a vertex using UPSERT pattern.
         Partition key (pk) is only set during creation, not updates.
-        Cosmos Gremlin requires partition key 'pk' and it's immutable.
         """
         try:
-            # Build property assignments dynamically
             prop_assignments = []
             bindings = {
                 "entity_id": entity_id,
                 "label": label,
             }
             
-            # Add other properties (these can be updated)
             for key, value in properties.items():
                 if value is not None:
-                    # Use prefixed binding names to avoid conflicts
                     prop_key = f"prop_{key}"
                     prop_assignments.append(f".property('{key}', {prop_key})")
                     bindings[prop_key] = value
             
-            # Join all property assignments
             props_str = "".join(prop_assignments)
             
-            # UPSERT pattern with partition key handling:
-            # - pk is ONLY set during vertex creation (inside addV)
-            # - pk is NOT updated on existing vertices (outside coalesce)
             query = f"""
             g.V(entity_id)
               .fold()
@@ -74,40 +67,35 @@ class GraphRepository:
               {props_str}
             """
 
-            logger.debug("Upserting entity: %s with properties: %s", entity_id, properties)
-            result = self.client.submit(query, bindings=bindings).all().result()
-            logger.info("Successfully upserted entity '%s' with label '%s'", entity_id, label)
-            return result
+            logger.debug("Upserting entity: %s", entity_id)
+            # FIXED: Use submit_async and await result
+            result_set = await self.client.submit_async(query, bindings=bindings)
+            return await result_set.all()
 
-        except GremlinServerError as exc:
+        except Exception as exc:
             logger.error("Failed to upsert entity '%s': %s", entity_id, exc)
             raise exc
-        except Exception as exc:
-            logger.error("Unexpected error upserting entity '%s': %s", entity_id, exc)
-            raise exc
 
-    def delete_entity(self, entity_id: str) -> None:
+    async def delete_entity(self, entity_id: str) -> None:
         """Delete a vertex and its associated edges."""
         try:
-            self.client.submit("g.V(id).drop()", bindings={"id": entity_id}).all().result()
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async("g.V(id).drop()", bindings={"id": entity_id})
+            await result_set.all()
             logger.info("Deleted entity: %s", entity_id)
         except Exception as exc:
             logger.error("Failed to delete entity %s: %s", entity_id, exc)
             raise exc
 
-    def create_relationship(
+    async def create_relationship(
         self,
         from_id: str,
         to_id: str,
         label: str,
         properties: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """
-        Create an edge between two existing vertices using UPSERT pattern.
-        Prevents duplicate edges between the same vertices with the same label.
-        """
+        """Create an edge between two existing vertices using UPSERT pattern."""
         try:
-            # Build property assignments for edge
             prop_assignments = []
             bindings = {
                 "from_id": from_id,
@@ -115,7 +103,6 @@ class GraphRepository:
                 "label": label,
             }
 
-            # Add edge properties if provided
             if properties:
                 for key, value in properties.items():
                     if value is not None:
@@ -125,9 +112,6 @@ class GraphRepository:
 
             props_str = "".join(prop_assignments)
 
-            # UPSERT pattern for edges:
-            # 1. Check if edge already exists with same label
-            # 2. If not, create it
             query = f"""
             g.V(from_id)
               .coalesce(
@@ -137,120 +121,118 @@ class GraphRepository:
               {props_str}
             """
 
-            logger.debug("Upserting relationship: %s -[%s]-> %s", from_id, label, to_id)
-            result = self.client.submit(query, bindings=bindings).all().result()
-            logger.info("Successfully upserted relationship: %s -[%s]-> %s", from_id, label, to_id)
-            return result
+            logger.debug("Upserting relationship: %s -> %s", from_id, to_id)
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async(query, bindings=bindings)
+            return await result_set.all()
 
-        except GremlinServerError as exc:
-            logger.error("Failed to upsert relationship %s -> %s: %s", from_id, to_id, exc)
-            raise exc
         except Exception as exc:
-            logger.error("Unexpected error upserting relationship %s -> %s: %s", from_id, to_id, exc)
+            logger.error("Failed to upsert relationship %s -> %s: %s", from_id, to_id, exc)
             raise exc
 
     # -------------------------
     # Graph read operations
     # -------------------------
 
-    def get_entities(self) -> List[Dict[str, Any]]:
+    async def get_entities(self) -> List[Dict[str, Any]]:
         """Fetch all vertices with properties."""
         try:
-            result = (
-                self.client
-                .submit("g.V().valueMap(true)")
-                .all()
-                .result()
-            )
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async("g.V().valueMap(true)")
+            result = await result_set.all()
             logger.info("Fetched %d entities from graph", len(result))
             return result
-
-        except GremlinServerError as exc:
+        except Exception as exc:
             logger.exception("Failed to fetch entities")
             raise exc
 
-    def get_relationships(self) -> List[Dict[str, Any]]:
+    async def get_relationships(self) -> List[Dict[str, Any]]:
         """Fetch all edges with metadata."""
         try:
-            result = (
-                self.client
-                .submit(
-                    "g.E()"
-                    ".project('id','label','outV','inV','properties')"
-                    ".by(id)"
-                    ".by(label)"
-                    ".by(outV().id())"
-                    ".by(inV().id())"
-                    ".by(valueMap())"
-                )
-                .all()
-                .result()
+            query = (
+                "g.E()"
+                ".project('id','label','outV','inV','properties')"
+                ".by(id)"
+                ".by(label)"
+                ".by(outV().id())"
+                ".by(inV().id())"
+                ".by(valueMap())"
             )
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async(query)
+            result = await result_set.all()
             logger.info("Fetched %d relationships from graph", len(result))
             return result
-
-        except GremlinServerError as exc:
+        except Exception as exc:
             logger.exception("Failed to fetch relationships")
             raise exc
 
-    def get_graph(self) -> Dict[str, Any]:
+    async def get_graph(self) -> Dict[str, Any]:
         """Fetch entities + relationships."""
         return {
-            "entities": self.get_entities(),
-            "relationships": self.get_relationships(),
+            "entities": await self.get_entities(),
+            "relationships": await self.get_relationships(),
         }
 
-    # ---------------------------------------------------------
-    # NEW: Advanced Read Operations for api/graph/fetch
-    # ---------------------------------------------------------
+    # -------------------------
+    # Advanced Read Operations
+    # -------------------------
 
-    def fetch_combined_graph(self, limit: int = 500, types: List[str] = None) -> Dict[str, Any]:
-        """
-        Unified fetch for graph visualization.
-        Returns format: { "nodes": [...], "edges": [...], "meta": {...} }
-        """
+    async def fetch_combined_graph(self, limit: int = 500, types: List[str] = None) -> Dict[str, Any]:
+        """Unified fetch for graph visualization."""
         try:
-            # 1. Build Node Query
             node_query = "g.V()"
             if types:
                 node_query += f".hasLabel(within({types}))"
             node_query += f".limit({limit}).valueMap(true)"
 
-            # 2. Build Edge Query (fetch edges connecting visible nodes)
-            edge_query = "g.E().limit(limit * 2).project('id','label','source','target','properties').by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            edge_query = (
+                "g.E().limit(limit_val).project('id','label','source','target','properties')"
+                ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            )
 
-            raw_nodes = self.client.submit(node_query).all().result()
-            raw_edges = self.client.submit(edge_query, bindings={"limit": limit}).all().result()
+            # FIXED: Use submit_async for both
+            node_rs = await self.client.submit_async(node_query)
+            raw_nodes = await node_rs.all()
+
+            edge_rs = await self.client.submit_async(edge_query, bindings={"limit_val": limit * 2})
+            raw_edges = await edge_rs.all()
 
             return {
                 "nodes": raw_nodes,
                 "edges": raw_edges,
-                "meta": {
-                    "count": {"nodes": len(raw_nodes), "edges": len(raw_edges)}
-                }
+                "meta": {"count": {"nodes": len(raw_nodes), "edges": len(raw_edges)}}
             }
         except Exception as exc:
             logger.error("Failed to fetch combined graph: %s", exc)
             raise exc
 
-    def search_nodes(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Search nodes by label or property values containing keyword."""
+    async def search_nodes(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Search nodes by label containing keyword."""
         try:
-            # Simple keyword search across labels
             query = f"g.V().hasLabel(containing('{keyword}')).limit({limit}).valueMap(true)"
-            return self.client.submit(query).all().result()
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async(query)
+            return await result_set.all()
         except Exception as exc:
             logger.error("Search failed for '%s': %s", keyword, exc)
             raise exc
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Get summary metrics for graph dashboard."""
         try:
-            total_nodes = self.client.submit("g.V().count()").all().result()[0]
-            total_edges = self.client.submit("g.E().count()").all().result()[0]
+            # FIXED: Use submit_async for all count/group queries
+            n_rs = await self.client.submit_async("g.V().count()")
+            total_nodes = (await n_rs.all())[0]
+
+            e_rs = await self.client.submit_async("g.E().count()")
+            total_edges = (await e_rs.all())[0]
             
-            node_types = self.client.submit("g.V().groupCount().by(label)").all().result()
-            edge_types = self.client.submit("g.E().groupCount().by(label)").all().result()
+            nt_rs = await self.client.submit_async("g.V().groupCount().by(label)")
+            node_types = await nt_rs.all()
+
+            et_rs = await self.client.submit_async("g.E().groupCount().by(label)")
+            edge_types = await et_rs.all()
 
             return {
                 "nodes": total_nodes,
@@ -262,12 +244,13 @@ class GraphRepository:
             logger.error("Failed to get stats: %s", exc)
             raise exc
 
-    def delete_data_by_filename(self, filename: str) -> None:
-        """Delete all vertices and edges associated with a specific file."""
+    async def delete_data_by_filename(self, filename: str) -> None:
+        """Delete all data associated with a specific file."""
         try:
-            # Delete vertices (and their edges) tagged with this filename
             query = "g.V().has('sourceDocumentId', filename).drop()"
-            self.client.submit(query, bindings={"filename": filename}).all().result()
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async(query, bindings={"filename": filename})
+            await result_set.all()
             logger.info("Cleared graph data for document: %s", filename)
         except Exception as exc:
             logger.error("Failed to clear document data for %s: %s", filename, exc)
@@ -277,36 +260,24 @@ class GraphRepository:
     # Utility operations
     # -------------------------
 
-    def entity_exists(self, entity_id: str) -> bool:
+    async def entity_exists(self, entity_id: str) -> bool:
         """Check if a vertex exists by ID."""
         try:
-            result = (
-                self.client
-                .submit("g.V(entity_id).count()", bindings={"entity_id": entity_id})
-                .all()
-                .result()
-            )
-            exists = result[0] > 0 if result else False
-            logger.debug("Entity '%s' exists: %s", entity_id, exists)
-            return exists
-
-        except GremlinServerError as exc:
-            logger.exception("Failed to check if entity exists: %s", entity_id)
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async("g.V(id).count()", bindings={"id": entity_id})
+            result = await result_set.all()
+            return result[0] > 0 if result else False
+        except Exception as exc:
+            logger.exception("Failed to check existence for: %s", entity_id)
             raise exc
 
-    def get_entity_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
+    async def get_entity_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single entity by ID."""
         try:
-            result = (
-                self.client
-                .submit("g.V(entity_id).valueMap(true)", bindings={"entity_id": entity_id})
-                .all()
-                .result()
-            )
-            entity = result[0] if result else None
-            logger.debug("Fetched entity '%s': %s", entity_id, entity)
-            return entity
-
-        except GremlinServerError as exc:
-            logger.exception("Failed to fetch entity by ID: %s", entity_id)
+            # FIXED: Use submit_async
+            result_set = await self.client.submit_async("g.V(id).valueMap(true)", bindings={"id": entity_id})
+            result = await result_set.all()
+            return result[0] if result else None
+        except Exception as exc:
+            logger.exception("Failed to fetch entity: %s", entity_id)
             raise exc
