@@ -12,7 +12,7 @@ from fastapi import UploadFile
 from app.utils.chunking import chunk_text
 from app.services.openai_extractor import extract_entities_and_relationships
 from app.services.graph_service import graph_service
-from app.utils.normalizer import normalize_entity_type
+from app.utils.normalizer import normalize_entity_type  # <--- Ensure this is imported
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class DocumentProcessor:
         return text.replace('_', ' ').strip().title()
 
     def _csv_to_narrative(self, df: pd.DataFrame) -> str:
+        # (Keep your existing narrative logic here - abbreviated for brevity)
         narratives = []
         columns = df.columns.tolist()
         roles = self._detect_schema_roles(columns)
@@ -68,7 +69,6 @@ class DocumentProcessor:
             if row.isna().all(): continue
             subj_val = str(row[subj_col])
             row_text = []
-
             row_text.append(f"There is a '{subj_label}' identified as '{subj_val}'.")
             
             for col in columns:
@@ -111,9 +111,7 @@ class DocumentProcessor:
         logger.info("Processing text input for file: %s", filename)
         
         # A. Create Unique Document ID
-        safe_filename = re.sub(r'[^a-zA-Z0-9_-]', '_', filename)
-        timestamp = int(pd.Timestamp.now().timestamp())
-        doc_id = filename  # Use simple filename as ID for UI matching
+        doc_id = filename 
 
         # B. Chunk & Extract
         chunks = chunk_text(text)
@@ -125,7 +123,11 @@ class DocumentProcessor:
             extracted_entities.extend(result.get("entities", []))
             extracted_relationships.extend(result.get("relationships", []))
 
-        # C. Create Parent Document Node (CRITICAL FOR UI LIST)
+        # --- NEW: Calculate Counts ---
+        node_count = len(extracted_entities)
+        edge_count = len(extracted_relationships)
+
+        # C. Create Parent Document Node
         doc_node = {
             "id": doc_id,
             "label": filename,
@@ -133,31 +135,36 @@ class DocumentProcessor:
             "properties": {
                 "filename": filename,
                 "uploadDate": str(pd.Timestamp.now()),
-                "nodeCount": len(extracted_entities),
+                "nodeCount": node_count,   # Save Node Count
+                "edgeCount": edge_count,   # Save Edge Count
                 "status": "processed",
                 "normType": "Document"
             }
         }
         
         # D. Normalize & Tag Entities
-        final_entities = [doc_node] # Start list with the Doc Node
+        final_entities = [doc_node] 
         
         for ent in extracted_entities:
             clean_id = re.sub(r'[^a-zA-Z0-9_-]', '_', ent["label"].lower())
             props = self._sanitize_properties(ent.get("properties", {}))
             
-            # TAGGING: Link to Document
+            # TAGGING
             props["documentId"] = doc_id
             
-            # NORMALIZATION: Fix Type
+            # --- CRITICAL FIX: FORCE NORMALIZATION ---
             raw_type = ent.get("type", "Concept")
-            clean_type = normalize_entity_type(raw_type, ent["label"])
-            props["normType"] = clean_type
+            raw_label = ent.get("label", "")
+            
+            # This converts "A0001" -> "Account", "Collision" -> "Organization"
+            clean_type = normalize_entity_type(raw_type, raw_label) 
+            
+            props["normType"] = clean_type # Store explicitly for frontend
 
             final_entities.append({
                 "id": clean_id,
-                "label": ent["label"],
-                "type": clean_type,
+                "label": raw_label,
+                "type": clean_type,  # Save the CLEAN type as the main type
                 "properties": props,
             })
 

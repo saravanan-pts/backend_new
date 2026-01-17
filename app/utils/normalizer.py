@@ -9,7 +9,7 @@ def normalize_entity_type(raw_type: str, label: str) -> str:
     l = (label or "").lower()
 
     # 1. EVENTS (Process Flow)
-    if any(x in t for x in ["activity", "event", "call"]) or \
+    if any(x in t for x in ["activity", "event", "call", "process"]) or \
        any(x in l for x in ["activated", "closed", "initiated", "received", "started", "ended", "application"]):
         return "Event"
 
@@ -18,9 +18,13 @@ def normalize_entity_type(raw_type: str, label: str) -> str:
         return "Time"
 
     # 3. ORGANIZATIONS (Banking & Insurance)
-    if any(x in t for x in ["org", "company", "branch"]) or \
+    if any(x in t for x in ["org", "company"]) or \
        any(x in l for x in ["towing", "repair", "mechanic", "collision", "auto body", "glass", "service", "inc", "ltd"]):
         return "Organization"
+
+    # --- NEW RULE: BRANCH ---
+    if "branch" in t or "branch" in l:
+        return "Branch"
 
     # 4. PEOPLE
     if any(x in t for x in ["person", "director", "agent", "customer", "driver"]) or \
