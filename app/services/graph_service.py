@@ -2,6 +2,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from app.repositories.graph_repository import GraphRepository
+from app.utils.normalizer import normalize_entity_type  # <--- IMPORT ADDED HERE
 
 logger = logging.getLogger(__name__)
 
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 class GraphService:
     """
     Service layer for graph-related business logic.
-    Orchestrates repositories, applies rules, and ensures consistency.
+    Orchestrates repositories, applies rules (Normalization), and ensures consistency.
     FIXED: All methods converted to async to prevent Event Loop conflicts.
     """
 
@@ -33,20 +34,39 @@ class GraphService:
         return result
 
     # -------------------------
-    # Entity logic
+    # Entity logic (WITH NORMALIZATION)
     # -------------------------
 
     async def add_entities(self, entities: List[Dict[str, Any]]) -> None:
         """
         Add multiple entities to the graph.
         [LOGIC RETAINED]: Validates each entity before calling the repository.
+        [NEW FEATURE]: Normalizes entity types automatically.
         """
         logger.info("GraphService: adding %d entities", len(entities))
 
         for entity in entities:
-            # Synchronous validation logic
+            # --- 1. APPLY NORMALIZATION LOGIC ---
+            # We clean the type before validation or storage
+            raw_type = entity.get("type", "Concept")
+            raw_label = entity.get("label", str(entity.get("id", "")))
+            
+            # Get the clean type (e.g., "Account", "Event", "Person")
+            clean_type = normalize_entity_type(raw_type, raw_label)
+            
+            # Update the entity object PERMANENTLY
+            entity["type"] = clean_type
+            
+            # Ensure the clean type is stored in properties if the Repo expects it there
+            if "properties" not in entity:
+                entity["properties"] = {}
+            entity["properties"]["type"] = clean_type
+            entity["properties"]["normType"] = clean_type # Helpful for Frontend styling
+
+            # --- 2. VALIDATION (Synchronous) ---
             self._validate_entity(entity)
 
+            # --- 3. PERSISTENCE (Async) ---
             # FIXED: Await the repository call
             await self.repo.create_entity(
                 entity_id=entity["id"],
@@ -87,10 +107,32 @@ class GraphService:
     async def get_graph(self) -> Dict[str, Any]:
         """
         Fetch complete graph (entities + relationships).
+        [NEW FEATURE]: Applies normalization on read to ensure legacy data is clean.
         """
         logger.info("GraphService: fetching full graph")
+        
         # FIXED: Await the repository call
-        return await self.repo.get_graph()
+        data = await self.repo.get_graph()
+
+        # Safety: Normalize outgoing data just in case DB has old dirty data
+        # Check if 'nodes' or 'entities' key exists (depends on your repo response)
+        nodes = data.get("nodes", data.get("entities", []))
+        
+        for node in nodes:
+            # Extract raw type from top-level or properties
+            props = node.get("properties", {})
+            raw_type = node.get("type") or props.get("type", "")
+            label = node.get("label", "")
+            
+            # Normalize
+            clean_type = normalize_entity_type(raw_type, label)
+            
+            # Apply back to node object
+            node["type"] = clean_type
+            if isinstance(props, dict):
+                props["normType"] = clean_type
+
+        return data
 
     async def get_entities(self, label: Optional[str] = None):
         """

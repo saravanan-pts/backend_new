@@ -56,14 +56,16 @@ class GraphRepository:
 
     async def clear_graph(self, scope: str = "all") -> bool:
         """
-        Delete graph data in SMALL batches to avoid 429 RequestRateTooLarge errors.
+        Delete graph data in batches to avoid 429 RequestRateTooLarge errors.
         Scope: all | documents | entities | relationships
         """
-        BATCH_SIZE = 20
+        # FIX 1: Increase Batch Size for speed
+        BATCH_SIZE = 500 
         
         try:
             logger.info(f"Starting batched clear of graph (scope={scope}, batch={BATCH_SIZE})")
             
+            # FIX 2: REMOVED .iterate() - Cosmos DB executes scripts automatically
             if scope == "relationships":
                 drop_query = f"g.E().limit({BATCH_SIZE}).drop()"
                 count_query = "g.E().count()"
@@ -71,6 +73,7 @@ class GraphRepository:
                 drop_query = f"g.V().limit({BATCH_SIZE}).drop()"
                 count_query = "g.V().count()"
             else:
+                # Default: all
                 drop_query = f"g.V().limit({BATCH_SIZE}).drop()"
                 count_query = "g.V().count()"
 
@@ -83,7 +86,8 @@ class GraphRepository:
                 
                 logger.info(f"Clearing graph... ~{remaining} items remaining.")
                 await self._execute_query(drop_query)
-                await asyncio.sleep(0.5)
+                # Small sleep to let DB breathe
+                await asyncio.sleep(0.2)
             
             logger.info("Graph cleared successfully.")
             return True
@@ -109,7 +113,7 @@ class GraphRepository:
             }
             
             for key, value in properties.items():
-                # FIXED: Skip 'id' and 'pk' to prevent "Partition key is readonly" error
+                # Skip 'id' and 'pk' to prevent "Partition key is readonly" error
                 if key in ["id", "pk"]:
                     continue
                 
@@ -121,7 +125,6 @@ class GraphRepository:
             props_str = "".join(prop_assignments)
             
             # Note: We explicitly set 'pk' inside the addV() step.
-            # We do NOT set it in the subsequent props_str updates.
             query = f"""
             g.V(entity_id)
               .fold()
@@ -144,6 +147,7 @@ class GraphRepository:
     async def delete_entity(self, entity_id: str) -> None:
         """Delete a vertex and its associated edges."""
         try:
+            # FIX: Removed .iterate() here too
             query = "g.V(id).drop()"
             await self._execute_query(query, bindings={"id": entity_id})
             logger.info("Deleted entity: %s", entity_id)
@@ -169,8 +173,6 @@ class GraphRepository:
 
             if properties:
                 for key, value in properties.items():
-                    # Edges generally don't have the same PK restriction on update, 
-                    # but good practice to skip system keys if they appear.
                     if key in ["id", "pk"]:
                         continue
                         
@@ -331,6 +333,7 @@ class GraphRepository:
         """Delete all data associated with a specific file (Batch Delete)."""
         BATCH_SIZE = 20
         try:
+            # FIX: Removed .iterate() here too
             query = f"g.V().has('sourceDocumentId', '{filename}').limit({BATCH_SIZE}).drop()"
             count_query = f"g.V().has('sourceDocumentId', '{filename}').count()"
             
@@ -340,7 +343,7 @@ class GraphRepository:
                 if remaining == 0:
                     break
                 await self._execute_query(query)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.2)
                 
             logger.info("Cleared graph data for document: %s", filename)
         except Exception as exc:

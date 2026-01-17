@@ -1,0 +1,36 @@
+case_id,activity,timestamp,CUSTOMER_ID,BRANCH_ID,ACCOUNT_TYPE,OPENING_BALANCE
+A00001,Account Application Received,2014-03-01,C00001,B00019,Savings,520482
+A00001,Account Application Received,2017-05-08,C00001,B00021,Fixed Deposit,760870
+A00001,Account Activated,2017-05-11,C00001,B00021,Fixed Deposit,760870
+A00001,Account Application Received,2022-03-02,C00001,B00005,Savings,584136
+A00001,Account Activated,2022-03-05,C00001,B00005,Savings,584136
+A00001,Account Closed,2022-10-07,C00001,B00005,Savings,584136
+A00002,Account Application Received,2018-09-24,C00002,B00038,Fixed Deposit,268824
+A00002,Account Activated,2018-09-27,C00002,B00038,Fixed Deposit,268824
+A00002,Account Application Received,2019-01-13,C00002,B00005,Checking,412781
+A00002,Account Activated,2019-01-16,C00002,B00005,Checking,412781
+A00002,Account Application Received,2020-02-29,C00002,B00043,Fixed Deposit,270204
+A00003,Account Application Received,2017-09-08,C00003,B00036,Savings,927468
+A00003,Account Application Received,2017-10-06,C00003,B00032,Savings,414033
+A00003,Account Activated,2017-10-09,C00003,B00032,Savings,414033
+A00003,Account Closed,2018-06-05,C00003,B00032,Savings,414033
+A00003,Account Application Received,2021-03-24,C00003,B00041,Savings,589218
+A00003,Account Activated,2021-03-26,C00003,B00041,Savings,589218
+A00004,Account Application Received,2017-11-15,C00004,B00021,Checking,202917
+A00004,Account Activated,2017-11-17,C00004,B00021,Checking,202917
+A00004,Account Closed,2018-02-09,C00004,B00021,Checking,202917
+A00004,Account Application Received,2020-07-23,C00004,B00027,Checking,506021
+A00004,Account Application Received,2020-08-30,C00004,B00008,Checking,546320
+A00004,Account Activated,2020-08-31,C00004,B00008,Checking,546320
+A00005,Account Application Received,2015-11-28,C00005,B00049,Savings,426326
+A00005,Account Activated,2015-12-01,C00005,B00049,Savings,426326
+A00005,Account Closed,2016-09-04,C00005,B00049,Savings,426326
+A00005,Account Application Received,2017-03-09,C00005,B00026,Checking,66238
+A00005,Account Application Received,2021-05-01,C00005,B00024,Fixed Deposit,457579
+A00006,Account Application Received,2018-03-20,C00006,B00024,Savings,747732
+A00006,Account Activated,2018-03-22,C00006,B00024,Savings,747732
+A00006,Account Closed,2019-03-01,C00006,B00024,Savings,747732
+A00006,Account Application Received,2020-09-03,C00006,B00010,Fixed Deposit,908163
+A00006,Account Activated,2020-09-05,C00006,B00010,Fixed Deposit,908163
+A00006,Account Application Received,2022-02-26,C00006,B00021,Savings,806772
+A00006,Account Activated,2022-02-27,C00006,B00021,Savings,806772

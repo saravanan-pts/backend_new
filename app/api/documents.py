@@ -1,77 +1,72 @@
-from fastapi import APIRouter, HTTPException
-from typing import Dict, Any
+from fastapi import APIRouter, HTTPException, Body
+from typing import List, Dict, Any
 import logging
-# Use the existing graph_service instead of creating a new repo
+
 from app.services.graph_service import graph_service
 
-# Configure logging to catch errors in the console
+router = APIRouter(prefix="/api/documents", tags=["Documents"])
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/documents", tags=["Documents"])
-
 @router.get("")
-async def list_documents():
+async def list_documents() -> List[Dict[str, Any]]:
     """
-    GET: Lists all instruction books (Documents) in your library.
+    Fetch all uploaded documents.
     """
     try:
-        query = "g.V().hasLabel('Document').valueMap(true)"
+        # Fetch all entities to filter for documents
+        all_entities = await graph_service.get_entities()
         
-        # FIX: Use .result() instead of await.
-        # The Gremlin Python driver returns a Future that works best 
-        # in FastAPI when blocked synchronously using nest_asyncio.
-        future = graph_service.repo.client.submit_async(query)
-        result_set = future.result()
+        documents = []
+        for entity in all_entities:
+            # Flexible checking for "Document" type
+            e_type = str(entity.get("type", "")).lower()
+            label = str(entity.get("label", "")).lower()
+            props = entity.get("properties", {})
+            norm_type = str(props.get("normType", "")).lower()
+            
+            # Check if this node represents a file
+            if "document" in e_type or "document" in label or "document" in norm_type:
+                documents.append({
+                    "id": entity.get("id"),
+                    "filename": props.get("filename", entity.get("label")), # Fallback to label
+                    "entityCount": props.get("nodeCount", 0),
+                    "uploadDate": props.get("uploadDate", ""),
+                    "status": props.get("status", "processed")
+                })
         
-        # Fetch all results from the set
-        future_results = result_set.all()
-        raw_docs = future_results.result()
-        
-        # Helper: CosmosDB returns properties as lists (e.g., {'filename': ['doc.pdf']})
-        # We need to flatten them to strings for the frontend
-        clean_docs = []
-        for d in raw_docs:
-            clean_item = {}
-            for k, v in d.items():
-                # If it's a list with 1 item, take the item. Otherwise keep it.
-                if isinstance(v, list) and len(v) == 1:
-                    clean_item[k] = v[0]
-                else:
-                    clean_item[k] = v
-            clean_docs.append(clean_item)
-        
-        return {"files": clean_docs}
+        return documents
+
     except Exception as e:
-        # Print actual error to terminal for debugging
-        print(f"CRITICAL ERROR in list_documents: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
+        logger.error(f"Error listing docs: {e}")
+        return []
 
 @router.delete("")
-async def delete_document(payload: Dict[str, Any]):
+async def delete_document(payload: Dict[str, Any] = Body(...)):
     """
-    DELETE: Removes a file and all the graph data (nodes/edges) it created.
+    Delete a document AND all its associated entities.
     """
     filename = payload.get("filename")
     if not filename:
-        raise HTTPException(status_code=400, detail="Filename is required")
-
-    try:
-        # 1. Clean up all the bricks (nodes/edges) created from this file
-        # Note: Ensure delete_data_by_filename in graph_repository is also updated or compatible
-        await graph_service.repo.delete_data_by_filename(filename)
+        raise HTTPException(status_code=400, detail="Filename required")
         
-        # 2. Delete the Document metadata vertex
-        delete_meta_query = "g.V().hasLabel('Document').has('filename', name).drop()"
+    logger.info(f"Deleting document: {filename}")
+    
+    # 1. Fetch ALL nodes to find children
+    all_nodes = await graph_service.get_entities()
+    ids_to_delete = []
+    
+    for node in all_nodes:
+        node_id = node.get("id")
+        props = node.get("properties", {})
         
-        # FIX: Use .result() for the direct client call
-        future = graph_service.repo.client.submit_async(
-            delete_meta_query, 
-            bindings={"name": filename}
-        )
-        result_set = future.result()
-        result_set.all().result()
-        
-        return {"status": "deleted", "filename": filename}
-    except Exception as e:
-        print(f"CRITICAL ERROR in delete_document: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+        # Check if node is the doc itself OR belongs to it
+        if node_id == filename:
+            ids_to_delete.append(node_id)
+        elif props.get("documentId") == filename:
+            ids_to_delete.append(node_id)
+    
+    # 2. Delete them
+    for nid in ids_to_delete:
+        await graph_service.repo.delete_entity(nid)
+    
+    return {"status": "success", "deleted_count": len(ids_to_delete)}
