@@ -111,7 +111,21 @@ class DocumentProcessor:
         logger.info("Processing text input for file: %s", filename)
         
         # A. Create Unique Document ID
-        doc_id = filename 
+        doc_id = filename
+
+        # Remove file extension first
+        if '.' in doc_id:
+            base_name = doc_id.rsplit('.', 1)[0]
+        else:
+            base_name = doc_id
+
+        if "_" in base_name:
+            parts = base_name.split('_', 1)
+            domain = parts[0]
+            documentId = parts[1]
+        else:
+            domain = "general"
+            documentId = base_name
 
         # B. Chunk & Extract
         chunks = chunk_text(text)
@@ -138,7 +152,9 @@ class DocumentProcessor:
                 "nodeCount": node_count,   # Save Node Count
                 "edgeCount": edge_count,   # Save Edge Count
                 "status": "processed",
-                "normType": "Document"
+                "normType": "Document",
+                "domain": domain,
+                "documentId": documentId
             }
         }
         
@@ -150,7 +166,8 @@ class DocumentProcessor:
             props = self._sanitize_properties(ent.get("properties", {}))
             
             # TAGGING
-            props["documentId"] = doc_id
+            props["documentId"] = documentId # Use the new documentId
+            props["domain"] = domain
             
             # --- CRITICAL FIX: FORCE NORMALIZATION ---
             raw_type = ent.get("type", "Concept")
@@ -176,7 +193,8 @@ class DocumentProcessor:
             
             rel_props = {
                 "confidence": str(rel.get("confidence", 1.0)),
-                "sourceDocumentId": doc_id
+                "documentId": documentId, # Use the new documentId
+                "domain": domain
             }
             
             final_relationships.append({

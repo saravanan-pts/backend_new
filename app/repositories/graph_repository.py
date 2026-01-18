@@ -266,27 +266,57 @@ class GraphRepository:
     # Advanced Read Operations
     # -------------------------
 
-    async def fetch_combined_graph(self, limit: int = 500, types: List[str] = None) -> Dict[str, Any]:
+    async def fetch_combined_graph(
+        self, limit: int = 500, types: List[str] = None, document_id: str = None
+    ) -> Dict[str, Any]:
         """Unified fetch for graph visualization."""
         try:
+            bindings = {"limit": limit}
             node_query = "g.V()"
+            edge_query_base = "g.E()"
+
+            # Add document filter if a document_id is provided
+            if document_id:
+                if "_" in document_id:
+                    parts = document_id.split('_', 1)
+                    domain = parts[0]
+                    docId = parts[1]
+                else:
+                    domain = "general"
+                    docId = document_id
+                
+                node_query += ".has('domain', domain).has('documentId', docId)"
+                edge_query_base += ".where(outV().has('domain', domain).has('documentId', docId)).where(inV().has('domain', domain).has('documentId', docId))"
+                bindings["domain"] = domain
+                bindings["docId"] = docId
+
+            # Add type filtering
             if types:
-                types_str = ",".join([f"'{t}'" for t in types])
-                node_query += f".hasLabel(within({types_str}))"
-            node_query += f".limit({limit}).valueMap(true)"
+                # Create a binding for the list of types
+                bindings["types_list"] = types
+                node_query += ".hasLabel(within(types_list))"
+
+            # Add limit and finalize query
+            node_query += ".limit(limit).valueMap(true)"
 
             edge_query = (
-                "g.E().limit(limit_val).project('id','label','source','target','properties')"
+                f"{edge_query_base}.limit(limit_val)"
+                ".project('id','label','source','target','properties')"
                 ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
             )
 
-            raw_nodes = await self._execute_query(node_query)
-            raw_edges = await self._execute_query(edge_query, bindings={"limit_val": limit * 2})
+            # Update bindings for edge query limit
+            bindings_edges = bindings.copy()
+            bindings_edges["limit_val"] = limit * 2
+
+
+            raw_nodes = await self._execute_query(node_query, bindings=bindings)
+            raw_edges = await self._execute_query(edge_query, bindings=bindings_edges)
 
             return {
                 "nodes": raw_nodes,
                 "edges": raw_edges,
-                "meta": {"count": {"nodes": len(raw_nodes), "edges": len(raw_edges)}}
+                "meta": {"count": {"nodes": len(raw_nodes), "edges": len(raw_edges)}},
             }
         except Exception as exc:
             logger.error("Failed to fetch combined graph: %s", exc)
@@ -333,9 +363,21 @@ class GraphRepository:
         """Delete all data associated with a specific file (Batch Delete)."""
         BATCH_SIZE = 20
         try:
-            # FIX: Removed .iterate() here too
-            query = f"g.V().has('sourceDocumentId', '{filename}').limit({BATCH_SIZE}).drop()"
-            count_query = f"g.V().has('sourceDocumentId', '{filename}').count()"
+            doc_id = filename
+            if "_" in doc_id:
+                parts = doc_id.rsplit('_', 1)
+                domain = parts[0]
+                documentId = parts[1]
+            else:
+                domain = "general"
+                documentId = doc_id
+            
+            if '.' in documentId:
+                documentId = documentId.rsplit('.', 1)[0]
+
+            # Delete entities
+            query = f"g.V().has('documentId', '{documentId}').has('domain', '{domain}').limit({BATCH_SIZE}).drop()"
+            count_query = f"g.V().has('documentId', '{documentId}').has('domain', '{domain}').count()"
             
             while True:
                 count_res = await self._execute_query(count_query)
@@ -344,6 +386,9 @@ class GraphRepository:
                     break
                 await self._execute_query(query)
                 await asyncio.sleep(0.2)
+
+            # Delete the document node itself
+            await self.delete_entity(doc_id)
                 
             logger.info("Cleared graph data for document: %s", filename)
         except Exception as exc:

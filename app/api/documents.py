@@ -50,11 +50,24 @@ async def list_documents() -> List[Dict[str, Any]]:
                     final_edges = 0
                 # ------------------------------------
 
+                raw_filename = props.get("filename", entity.get("label"))
+                if raw_filename and '.' in raw_filename:
+                    display_filename = raw_filename.rsplit('.', 1)[0]
+                else:
+                    display_filename = raw_filename
+                
+                # The documentId used for filtering entities
+                filter_id = props.get("documentId", display_filename)
+                
+                # Unwrap list if necessary for filter_id
+                if isinstance(filter_id, list) and len(filter_id) > 0:
+                    filter_id = filter_id[0]
+
                 documents.append({
-                    "id": entity.get("id"),
-                    "filename": props.get("filename", entity.get("label")), 
+                    "id": filter_id,
+                    "filename": display_filename,
                     "entityCount": final_nodes,
-                    "relationCount": final_edges, # Returning edge count as well
+                    "relationCount": final_edges,
                     "uploadDate": props.get("uploadDate", ""),
                     "status": props.get("status", "processed")
                 })
@@ -76,23 +89,6 @@ async def delete_document(payload: Dict[str, Any] = Body(...)):
         
     logger.info(f"Deleting document: {filename}")
     
-    # 1. Fetch ALL nodes to find children
-    # (Optimization: Ideally, the repository would support delete_by_property directly)
-    all_nodes = await graph_service.get_entities()
-    ids_to_delete = []
+    await graph_service.repo.delete_data_by_filename(filename)
     
-    for node in all_nodes:
-        node_id = node.get("id")
-        props = node.get("properties", {})
-        
-        # Check if node is the doc itself OR belongs to it (via documentId tag)
-        if node_id == filename:
-            ids_to_delete.append(node_id)
-        elif props.get("documentId") == filename:
-            ids_to_delete.append(node_id)
-    
-    # 2. Delete them
-    for nid in ids_to_delete:
-        await graph_service.repo.delete_entity(nid)
-    
-    return {"status": "success", "deleted_count": len(ids_to_delete)}
+    return {"status": "success", "deleted": filename}

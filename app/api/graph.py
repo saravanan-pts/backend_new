@@ -11,10 +11,12 @@ async def fetch_graph(payload: Dict[str, Any]):
     """Loads combined nodes and edges for the frontend map."""
     limit = payload.get("limit", 500)
     filters = payload.get("filters", {})
+    document_id = filters.get("document_id")
     # Uses the 'brain' skills added to the repository to fetch nodes and edges together
     return await graph_service.repo.fetch_combined_graph(
-        limit=limit, 
-        types=filters.get("types")
+        limit=limit,
+        types=filters.get("types"),
+        document_id=document_id
     )
 
 @router.post("/search")
@@ -115,6 +117,6 @@ async def delete_document_data(payload: Dict[str, Any]):
     if not filename:
         raise HTTPException(status_code=400, detail="Filename is required")
     
-    # Deletes all nodes and edges tagged with the specified sourceDocumentId
+    # Deletes all nodes and edges tagged with the specified documentId
     await graph_service.repo.delete_data_by_filename(filename)
     return {"status": "deleted", "filename": filename}
