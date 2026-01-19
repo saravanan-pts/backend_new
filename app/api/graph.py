@@ -1,12 +1,13 @@
 from fastapi import APIRouter, HTTPException, Body
-from typing import Dict, Any, List
+from typing import Dict, Any
 import logging
 from app.services.graph_service import graph_service
-# Note: This service handles complex math like shortest paths and community detection
 from app.services.graph_analytics import graph_analytics
 
 router = APIRouter(prefix="/api/graph", tags=["Graph"])
 logger = logging.getLogger(__name__)
+
+# --- FETCH & STATS ---
 
 @router.post("/fetch")
 async def fetch_graph(payload: Dict[str, Any] = Body(...)):
@@ -16,12 +17,9 @@ async def fetch_graph(payload: Dict[str, Any] = Body(...)):
         filters = payload.get("filters", {})
         document_id = filters.get("document_id")
         
-        # Log if we are filtering
         if document_id:
             logger.info(f"Fetching graph for document: {document_id}")
 
-        # Uses the 'brain' skills added to the repository to fetch nodes and edges together
-        # We continue to use the Repo method here because it handles the combined logic perfectly
         return await graph_service.repo.fetch_combined_graph(
             limit=limit,
             types=filters.get("types"),
@@ -36,45 +34,61 @@ async def search_graph(payload: Dict[str, Any] = Body(...)):
     """Highlights specific bricks in the city using a keyword."""
     query = payload.get("query")
     if not query:
-        # Return empty list instead of error for smoother UI
         return {"results": [], "count": 0}
     
-    # Searches nodes based on labels or property values containing the keyword
     results = await graph_service.search_nodes(query)
     return {"results": results, "count": len(results)}
 
 @router.get("/stats")
 async def graph_stats():
-    """Returns the city 'Report Card' showing total counts."""
-    # Aggregates total node/edge counts and counts per type for the dashboard
     return await graph_service.get_stats()
+
+# --- ENTITY (NODE) MANAGEMENT ---
 
 @router.post("/entity")
 async def entity_crud(payload: Dict[str, Any] = Body(...)):
-    """Unified controller for adding, changing, or removing Lego houses (nodes)."""
+    """Unified controller for adding, changing, or removing nodes."""
     try:
         action = payload.get("action")
-        # Support both wrapped "data" and direct payload for flexibility
         data = payload.get("data", payload)
         
         if action == "create":
-            # Wraps logic to add a new vertex with the UPSERT pattern
+            # --- ROBUST FIX FOR CREATION ---
+            # Ensure 'normType' and 'documentId' are preserved correctly
+            properties = data.get("properties", {}).copy()
+            
+            # 1. Persist Type: Copy 'type' to 'normType' immediately
+            if "type" in data and data["type"]:
+                properties["normType"] = data["type"]
+            
+            # 2. Assign Properties back to data
+            data["properties"] = properties
+            
+            # 3. Create
             await graph_service.add_entities([data])
             return {"status": "success", "message": "Entity created"}
         
         elif action == "update":
-            # Uses the UPSERT logic in the repository to update properties without duplication
             entity_id = data.get("id")
             if not entity_id:
                 raise HTTPException(status_code=400, detail="Entity ID required")
-            await graph_service.update_entity(entity_id, data)
+            
+            # --- FIX: PERSIST TYPE CHANGE ---
+            # If the user changed the type in UI, we save it as 'normType' 
+            # because Gremlin Labels are immutable.
+            properties = data.get("properties", {}).copy()
+            if "type" in data and data["type"]:
+                properties["normType"] = data["type"]
+            
+            data["properties"] = properties
+            
+            await graph_service.update_entity(entity_id, data["properties"])
             return {"status": "success", "message": "Entity updated"}
         
         elif action == "delete":
             entity_id = data.get("id")
             if not entity_id:
-                raise HTTPException(status_code=400, detail="Entity ID required for deletion")
-            # Removes the vertex and all its connected edges from the graph
+                raise HTTPException(status_code=400, detail="Entity ID required")
             await graph_service.delete_entity(entity_id)
             return {"status": "success", "message": f"Entity {entity_id} deleted"}
         
@@ -83,15 +97,18 @@ async def entity_crud(payload: Dict[str, Any] = Body(...)):
         logger.error(f"Entity CRUD Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- RELATIONSHIP (EDGE) MANAGEMENT ---
+
 @router.post("/relationship")
 async def relationship_crud(payload: Dict[str, Any] = Body(...)):
-    """Unified controller for building or removing roads (edges)."""
+    """Unified controller for edges."""
     try:
         action = payload.get("action")
         data = payload.get("data", payload)
 
         if action == "create":
-            # Re-maps frontend 'source/target' terminology to backend 'from/to' labels
+            # Validates that we can link ANY entities (including Files)
+            # Files are just nodes with type="Document", so this works natively.
             await graph_service.add_relationship(
                 from_id=data.get("source") or data.get("from"),
                 to_id=data.get("target") or data.get("to"),
@@ -100,23 +117,19 @@ async def relationship_crud(payload: Dict[str, Any] = Body(...)):
             )
             return {"status": "success", "message": "Relationship created"}
         
-        # --- FIX: ADDED UPDATE LOGIC ---
         elif action == "update":
             rel_id = data.get("id")
             if not rel_id:
                 raise HTTPException(status_code=400, detail="Relationship ID required")
             
-            # Extract properties to update
             props = data.get("properties", data)
             await graph_service.update_relationship(rel_id, props)
             return {"status": "success", "message": "Relationship updated"}
 
-        # --- FIX: IMPLEMENTED DELETE LOGIC ---
         elif action == "delete":
             rel_id = data.get("id")
             if not rel_id:
-                # If ID is missing, we can't delete a specific edge easily
-                raise HTTPException(status_code=400, detail="Relationship ID required for deletion")
+                raise HTTPException(status_code=400, detail="Relationship ID required")
             
             await graph_service.delete_relationship(rel_id)
             return {"status": "success", "message": "Relationship removed"}
@@ -126,14 +139,14 @@ async def relationship_crud(payload: Dict[str, Any] = Body(...)):
         logger.error(f"Relationship CRUD Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- ANALYTICS & DOCUMENTS ---
+
 @router.post("/analyze")
 async def analyze_graph(payload: Dict[str, Any] = Body(...)):
-    """Calls the Expert Architect for shortest paths or community groupings."""
     analysis_type = payload.get("type")
     params = payload.get("params", {})
 
     if analysis_type == "shortest_path":
-        # Calculates the path between two vertices using Gremlin's path() step
         result = await graph_analytics.find_shortest_path(
             source_id=params.get("source"), 
             target_id=params.get("target")
@@ -141,7 +154,6 @@ async def analyze_graph(payload: Dict[str, Any] = Body(...)):
         return {"result": result}
     
     elif analysis_type == "community_detection":
-        # Groups connected nodes into neighborhoods using connected components and AI summaries
         result = await graph_analytics.detect_communities()
         return {"result": result}
 
@@ -149,13 +161,9 @@ async def analyze_graph(payload: Dict[str, Any] = Body(...)):
 
 @router.post("/document")
 async def delete_document_data(payload: Dict[str, Any] = Body(...)):
-    """Removes all bricks associated with a specific instruction book."""
     filename = payload.get("filename")
     if not filename:
         raise HTTPException(status_code=400, detail="Filename is required")
     
-    # --- FIX: Use Robust Service Method ---
-    # Deletes all nodes and edges tagged with the specified documentId using the loop method
     count = await graph_service.delete_document_data(filename)
-    
     return {"status": "deleted", "filename": filename, "nodes_removed": count}
