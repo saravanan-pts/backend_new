@@ -10,15 +10,15 @@ logger = logging.getLogger(__name__)
 @router.get("")
 async def list_documents() -> List[Dict[str, Any]]:
     """
-    Fetch all uploaded documents with correct node and edge counts.
+    Fetch all uploaded documents.
+    CRITICAL: Sends full filename as ID so Repo can split it correctly later.
     """
     try:
-        # Fetch all entities to filter for documents
         all_entities = await graph_service.get_entities()
         
         documents = []
         for entity in all_entities:
-            # 1. Flexible checking to find Document nodes
+            # Flexible checking to find Document nodes
             e_type = str(entity.get("type", "")).lower()
             label = str(entity.get("label", "")).lower()
             props = entity.get("properties", {})
@@ -27,45 +27,47 @@ async def list_documents() -> List[Dict[str, Any]]:
             # Check if this node represents a file
             if "document" in e_type or "document" in label or "document" in norm_type:
                 
-                # --- FIX: ROBUST COUNT EXTRACTION ---
-                # Cosmos DB often returns properties as lists (e.g. ['94'])
+                # --- Count Extraction (Robust) ---
                 raw_node_count = props.get("nodeCount", 0)
                 raw_edge_count = props.get("edgeCount", 0)
                 
-                # Unwrap list if necessary
-                if isinstance(raw_node_count, list) and len(raw_node_count) > 0:
+                if isinstance(raw_node_count, list) and len(raw_node_count) > 0: 
                     raw_node_count = raw_node_count[0]
-                if isinstance(raw_edge_count, list) and len(raw_edge_count) > 0:
+                if isinstance(raw_edge_count, list) and len(raw_edge_count) > 0: 
                     raw_edge_count = raw_edge_count[0]
                 
-                # Convert to integer safely
-                try:
+                try: 
                     final_nodes = int(float(str(raw_node_count)))
-                except (ValueError, TypeError):
+                except (ValueError, TypeError): 
                     final_nodes = 0
 
-                try:
+                try: 
                     final_edges = int(float(str(raw_edge_count)))
-                except (ValueError, TypeError):
+                except (ValueError, TypeError): 
                     final_edges = 0
-                # ------------------------------------
 
-                raw_filename = props.get("filename", entity.get("label"))
-                if raw_filename and '.' in raw_filename:
-                    display_filename = raw_filename.rsplit('.', 1)[0]
+                # --- Filename Logic ---
+                # 1. Get the REAL filename (e.g. "car_ins_call.csv")
+                real_filename = props.get("filename", entity.get("label"))
+                if isinstance(real_filename, list):
+                    real_filename = real_filename[0]
+                real_filename = str(real_filename)
+
+                # 2. Create display name (e.g. "car_ins_call")
+                if '.' in real_filename:
+                    display_filename = real_filename.rsplit('.', 1)[0]
                 else:
-                    display_filename = raw_filename
+                    display_filename = real_filename
                 
-                # The documentId used for filtering entities
-                filter_id = props.get("documentId", display_filename)
+                # --- CRITICAL FIX ---
+                # We MUST use the full 'real_filename' as the ID.
+                # This ensures that when Frontend sends this ID back to Fetch/Delete,
+                # the Repository receives "car_ins_call.csv" and can correctly
+                # split it into domain="car" and id="ins_call".
                 
-                # Unwrap list if necessary for filter_id
-                if isinstance(filter_id, list) and len(filter_id) > 0:
-                    filter_id = filter_id[0]
-
                 documents.append({
-                    "id": filter_id,
-                    "filename": display_filename,
+                    "id": real_filename,          # <--- The Fix: Use full name
+                    "filename": display_filename, # Display only
                     "entityCount": final_nodes,
                     "relationCount": final_edges,
                     "uploadDate": props.get("uploadDate", ""),
@@ -82,6 +84,7 @@ async def list_documents() -> List[Dict[str, Any]]:
 async def delete_document(payload: Dict[str, Any] = Body(...)):
     """
     Delete a document AND all its associated entities.
+    Uses the Repository's smart split logic.
     """
     filename = payload.get("filename")
     if not filename:
@@ -89,6 +92,13 @@ async def delete_document(payload: Dict[str, Any] = Body(...)):
         
     logger.info(f"Deleting document: {filename}")
     
-    await graph_service.repo.delete_data_by_filename(filename)
-    
-    return {"status": "success", "deleted": filename}
+    try:
+        # Pass the full filename (e.g., "car_ins_call.csv") to the repo.
+        # The repo will split it -> domain="car", id="ins_call" -> delete matching data.
+        await graph_service.repo.delete_data_by_filename(filename)
+            
+        return {"status": "success", "deleted": filename}
+        
+    except Exception as e:
+        logger.error(f"Error deleting document: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

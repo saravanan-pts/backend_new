@@ -1,0 +1,41 @@
+case_id,activity,timestamp,Job,Marital,Outcome
+1,Outbound Call Started,2024-01-28 13:45:20,management,single,No_Result
+1,Call Ended (No Sale),2024-01-28 13:46:30,management,single,No_Result
+2,Outbound Call Started,2024-05-26 14:49:03,blue-collar,married,No_Result
+2,Call Ended (No Sale),2024-05-26 14:52:08,blue-collar,married,No_Result
+3,Outbound Call Started,2024-06-03 16:30:24,management,single,failure
+3,Sale Closed,2024-06-03 16:36:04,management,single,failure
+4,Outbound Call Started,2024-05-11 12:06:43,student,single,No_Result
+4,Sale Closed,2024-05-11 12:20:22,student,single,No_Result
+5,Outbound Call Started,2024-06-03 14:35:44,management,married,No_Result
+5,Call Ended (No Sale),2024-06-03 14:38:56,management,married,No_Result
+6,Outbound Call Started,2024-05-22 14:58:08,technician,single,failure
+6,Sale Closed,2024-05-22 15:11:24,technician,single,failure
+7,Outbound Call Started,2024-03-17 13:00:02,admin.,single,No_Result
+7,Sale Closed,2024-03-17 13:03:17,admin.,single,No_Result
+8,Outbound Call Started,2024-05-12 15:39:43,management,divorced,No_Result
+8,Call Ended (No Sale),2024-05-12 15:40:49,management,divorced,No_Result
+9,Outbound Call Started,2024-11-18 12:20:56,admin.,married,No_Result
+9,Call Ended (No Sale),2024-11-18 12:22:42,admin.,married,No_Result
+10,Outbound Call Started,2024-05-12 9:22:20,blue-collar,married,No_Result
+10,Call Ended (No Sale),2024-05-12 9:27:46,blue-collar,married,No_Result
+11,Outbound Call Started,2024-06-01 13:04:28,services,single,No_Result
+11,Call Ended (No Sale),2024-06-01 13:07:29,services,single,No_Result
+12,Outbound Call Started,2024-01-29 16:45:50,blue-collar,married,No_Result
+12,Sale Closed,2024-01-29 16:53:40,blue-collar,married,No_Result
+13,Outbound Call Started,2024-01-27 16:19:41,technician,married,No_Result
+13,Sale Closed,2024-01-27 16:31:22,technician,married,No_Result
+14,Outbound Call Started,2024-06-19 10:29:56,self-employed,divorced,No_Result
+14,Call Ended (No Sale),2024-06-19 10:32:39,self-employed,divorced,No_Result
+15,Outbound Call Started,2024-07-29 14:15:09,services,single,other
+15,Sale Closed,2024-07-29 14:19:45,services,single,other
+16,Outbound Call Started,2024-08-12 16:18:48,management,single,failure
+16,Sale Closed,2024-08-12 16:20:59,management,single,failure
+17,Outbound Call Started,2024-05-06 11:48:45,admin.,single,other
+17,Call Ended (No Sale),2024-05-06 11:50:17,admin.,single,other
+18,Outbound Call Started,2024-09-11 11:23:26,management,married,other
+18,Sale Closed,2024-09-11 11:34:24,management,married,other
+19,Outbound Call Started,2024-05-06 12:42:54,blue-collar,married,failure
+19,Sale Closed,2024-05-06 12:50:25,blue-collar,married,failure
+20,Outbound Call Started,2024-04-05 10:34:08,blue-collar,married,No_Result
+20,Sale Closed,2024-04-05 10:41:44,blue-collar,married,No_Result
