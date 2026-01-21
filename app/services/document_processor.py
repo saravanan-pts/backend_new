@@ -4,10 +4,6 @@ import re
 import json
 import pandas as pd
 from typing import Dict, Any, List
-from fastapi import UploadFile
-
-# REMOVED: from app.services.graph_service import graph_service (Fixes Crash)
-# REMOVED: from app.services.openai_extractor ... (Moved to GraphService)
 
 logger = logging.getLogger(__name__)
 
@@ -52,41 +48,30 @@ class DocumentProcessor:
         return text.replace('_', ' ').strip().title()
 
     # --- 2. CRITICAL STANDARDIZATION LOGIC ---
-    # Made PUBLIC (removed underscore) so GraphService can use it
     def standardize_label(self, label: str) -> str:
         """
         The Master Cleaning Function.
         Merges 'Activity Sale Closed' -> 'Sale Closed'.
-        Merges 'Outcome No Result' -> 'No Result'.
         """
         if not label: return "Unknown"
         clean = label.strip()
         
-        # List of prefixes to strip out to ensure merging
         prefixes = ["Activity ", "Outcome ", "Status ", "Event ", "Job ", "Action "]
-        
         for prefix in prefixes:
             if clean.lower().startswith(prefix.lower()):
                 clean = clean[len(prefix):].strip()
 
-        # Special Exception: Don't strip 'Case' if it's strictly "Case"
         if clean.lower() == "case": 
             return "Case" 
         
         return clean.title()
 
-    # Made PUBLIC (removed underscore) so GraphService can use it
     def generate_id(self, label: str) -> str:
         """
         Deterministic ID Generation.
-        Guarantees that 'Sale Closed' always results in 'sale_closed'.
         """
-        # 1. First, standardize the label
         std_label = self.standardize_label(label)
-        
-        # 2. Convert to strict ID format (lowercase, underscores)
         clean_id = re.sub(r'[^a-zA-Z0-9_-]', '_', std_label.lower()).strip('_')
-        
         return clean_id
 
     # --- 3. NARRATIVE GENERATION (CSV -> Text) ---
@@ -107,8 +92,17 @@ class DocumentProcessor:
             except:
                 pass
 
+        # --- PROGRESS LOGGING LOGIC ---
+        total_rows = len(df)
+        logger.info(f"Starting narrative generation for {total_rows} rows...")
+        
         prev_row = None
-        for idx, row in df.iterrows():
+        
+        for i, (idx, row) in enumerate(df.iterrows()):
+            # Log every row if small file (<50), otherwise log every 50 rows
+            if total_rows <= 50 or (i + 1) % 50 == 0:
+                logger.info(f"Processing row {i + 1}/{total_rows}...")
+
             if row.isna().all(): continue
             subj_val = str(row[subj_col])
             row_text = []
@@ -155,27 +149,64 @@ class DocumentProcessor:
         return sanitized
 
     def _parse_filename(self, filename: str):
+        """
+        Extracts Domain and Base Filename.
+        Example: "Trading_claims_log.csv" -> ("Trading", "claims_log")
+        Example: "claims_log.csv" -> ("general", "claims_log")
+        """
         if '.' in filename: base = filename.rsplit('.', 1)[0]
         else: base = filename
-        if "_" in base: parts = base.split('_', 1); return parts[0], parts[1]
+        
+        if "_" in base: 
+            parts = base.split('_', 1)
+            return parts[0], parts[1] # Domain, DocumentName
+        
         return "general", base
 
-    # --- MAIN PARSER (Returns Text Only) ---
-    def process_file(self, file_content: bytes, filename: str) -> str:
+    # --- MAIN PROCESSOR (Returns Stats) ---
+    async def process_file(self, file_content: bytes, filename: str) -> Dict[str, Any]:
         """
-        Parses the file and returns the narrative text.
-        GraphService will handle the Loop, AI call, and Saving.
+        1. Parses the file into narrative text.
+        2. Sends text to GraphService for AI processing.
+        3. Returns statistics (nodes/edges count).
         """
         logger.info(f"DocumentProcessor: Parsing file {filename}")
         
+        narrative_text = ""
+        
+        # 1. Extract Domain from Filename
+        domain, doc_name = self._parse_filename(filename)
+
+        # 2. Convert File to Text
         if filename.lower().endswith(".csv"):
             df = pd.read_csv(io.BytesIO(file_content))
-            return self._csv_to_narrative(df)
+            narrative_text = self._csv_to_narrative(df)
         
         elif filename.lower().endswith(".txt"):
-            return file_content.decode("utf-8", errors="ignore")
+            narrative_text = file_content.decode("utf-8", errors="ignore")
             
         else:
-            return ""
+            return {"error": "Unsupported file format", "nodes_created": 0}
+
+        if not narrative_text:
+            return {"nodes_created": 0, "edges_created": 0, "message": "Empty document"}
+
+        logger.info(f"Generated narrative of length {len(narrative_text)}. Sending to GraphService (Domain: {domain})...")
+
+        # 3. Lazy Import GraphService
+        from app.services.graph_service import graph_service
+
+        # 4. Process the Narrative
+        try:
+            stats = await graph_service.process_narrative(narrative_text, filename)
+            return stats
+        except AttributeError:
+             logger.warning("graph_service.process_narrative not found, trying process_content...")
+             raise
+
+    async def process_text(self, text: str) -> Dict[str, Any]:
+        """Handles raw text input from the frontend."""
+        from app.services.graph_service import graph_service
+        return await graph_service.process_narrative(text, "raw_input.txt")
 
 document_processor = DocumentProcessor()

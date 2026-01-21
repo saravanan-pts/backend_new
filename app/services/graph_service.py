@@ -1,5 +1,6 @@
 import logging
 import uuid
+import re
 import pandas as pd
 from typing import List, Dict, Any, Optional
 
@@ -7,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from app.repositories.graph_repository import graph_repository 
 from app.utils.normalizer import normalize_entity_type
 
-# IMPORTS (No Circular Dependency now)
+# IMPORTS
 from app.services.document_processor import document_processor
 from app.services.openai_extractor import extract_entities_and_relationships
 
@@ -16,46 +17,104 @@ logger = logging.getLogger(__name__)
 class GraphService:
     """
     Service layer for graph-related business logic.
-    Orchestrates repositories, applies rules (Normalization), and ensures consistency.
+    Uses a 'Hybrid' approach: AI for extraction + Hardcoded Rules for strict typing.
     """
 
     def __init__(self):
         self.repo = graph_repository
 
     # -------------------------
-    # 1. File Processing (The Orchestrator)
+    # 0. HYBRID SCHEMA MAPPER
     # -------------------------
-    async def process_and_ingest_file(self, file_content: bytes, filename: str):
+    def _apply_hybrid_typing(self, entity: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Orchestrates: Raw File -> Text -> Chunking -> AI -> Cleaning -> DB
+        Double-Lock Validation:
+        Overrides generic AI types (like 'Concept') with specific business types
+        based on known keywords from your CSV data.
         """
-        logger.info(f"Starting processing for file: {filename}")
-
-        # A. Get Narrative Text (Using DocumentProcessor)
-        full_text = document_processor.process_file(file_content, filename)
+        label = entity.get("label", "").strip()
         
-        if not full_text:
-            logger.warning(f"No text extracted from {filename}")
+        # 1. Detect Activities (Exact Matches)
+        activities = [
+            "Outbound Call Started", "Call Ended (No Sale)", "Sale Closed", 
+            "Follow Up", "Meeting Booked"
+        ]
+        if label in activities:
+            entity["type"] = "Activity"
+            return entity
+
+        # 2. Detect Jobs/Roles
+        jobs = [
+            "management", "blue-collar", "technician", "admin.", 
+            "services", "retired", "self-employed", "unemployed", 
+            "entrepreneur", "housemaid", "student"
+        ]
+        if label.lower() in jobs:
+            entity["type"] = "Job"
+            return entity
+
+        # 3. Detect Marital Status
+        statuses = ["married", "single", "divorced", "widowed"]
+        if label.lower() in statuses:
+            entity["type"] = "MaritalStatus"
+            return entity
+
+        # 4. Detect Outcomes
+        outcomes = ["No_Result", "failure", "success", "other"]
+        if label in outcomes:
+            entity["type"] = "Outcome"
+            return entity
+
+        # 5. Detect Case IDs (Numeric strings)
+        if label.isdigit():
+            entity["type"] = "Case"
+            entity["label"] = f"Case {label}" 
+
+        return entity
+
+    # -------------------------
+    # 1. Narrative Processing (With Live Updates)
+    # -------------------------
+    async def process_narrative(self, narrative_text: str, filename: str) -> Dict[str, Any]:
+        """
+        Orchestrates: Text Narrative -> Chunking -> AI Extraction -> Hybrid Typing -> DB Saving.
+        """
+        logger.info(f"Starting graph processing for file: {filename}")
+
+        if not narrative_text:
+            logger.warning(f"No text provided for {filename}")
             return {"status": "empty", "filename": filename}
 
-        # B. Chunking (Split into 4000 char blocks)
+        # A. Chunking
         CHUNK_SIZE = 4000
-        chunks = [full_text[i:i+CHUNK_SIZE] for i in range(0, len(full_text), CHUNK_SIZE)]
+        chunks = [narrative_text[i:i+CHUNK_SIZE] for i in range(0, len(narrative_text), CHUNK_SIZE)]
         total_chunks = len(chunks)
         
-        logger.info(f"Document split into {total_chunks} chunks.")
+        # Force print to ensure visibility immediately
+        print(f"--- Document split into {total_chunks} chunks. Starting AI... ---", flush=True)
 
         all_entities = []
         all_relationships = []
         
         # Meta-data parsing
-        domain, doc_id = document_processor._parse_filename(filename)
+        domain = "general"
+        doc_id = filename
+        
+        try:
+            domain, doc_id = document_processor._parse_filename(filename)
+        except:
+            if "_" in filename:
+                parts = filename.split('_', 1)
+                domain = parts[0]
+                doc_id = parts[1]
 
-        # C. Processing Loop
+        # B. Processing Loop
         for i, chunk in enumerate(chunks):
             current_step = i + 1
-            # Terminal Progress Bar (The Logic you requested)
-            logger.info(f"Processing Chunk {current_step}/{total_chunks} ({len(chunk)} chars)...")
+            
+            # --- LIVE UPDATE FIX: FORCE FLUSH ---
+            # This ensures the log appears instantly in the terminal
+            print(f"--> Processing Chunk {current_step}/{total_chunks} ({len(chunk)} chars)...", flush=True)
             
             try:
                 # Call AI
@@ -63,20 +122,21 @@ class GraphService:
                 extracted_entities = result.get("entities", [])
                 extracted_rels = result.get("relationships", [])
 
-                # --- D. APPLY CRITICAL CLEANING LOGIC ---
-                # We use the helper functions from DocumentProcessor here
+                # --- C. HYBRID PROCESSING & CLEANING ---
                 
                 # Clean Entities
                 for ent in extracted_entities:
+                    # 1. Apply Hybrid Typing (Double-Lock)
+                    ent = self._apply_hybrid_typing(ent)
+
                     raw_label = ent.get("label", "")
                     
-                    # Apply your Standardizer (e.g. remove "Activity ")
+                    # 2. Standardize Label
                     final_label = document_processor.standardize_label(raw_label)
                     
-                    # Apply your Deterministic ID Generator
+                    # 3. Generate ID
                     clean_id = document_processor.generate_id(final_label)
                     
-                    # Update Entity
                     ent["id"] = clean_id
                     ent["label"] = final_label
                     
@@ -84,12 +144,12 @@ class GraphService:
                     ent["properties"]["documentId"] = doc_id
                     ent["properties"]["domain"] = domain
                     
-                    # Sanitize properties using helper
+                    # 4. Sanitize
                     ent["properties"] = document_processor._sanitize_properties(ent["properties"])
 
                     all_entities.append(ent)
 
-                # Clean Relationships (Ensure IDs match Nodes)
+                # Clean Relationships
                 for rel in extracted_rels:
                     from_id = document_processor.generate_id(rel["from"])
                     to_id = document_processor.generate_id(rel["to"])
@@ -105,9 +165,10 @@ class GraphService:
 
             except Exception as e:
                 logger.error(f"Error processing chunk {current_step}: {e}")
+                print(f"Error on chunk {current_step}: {e}", flush=True)
                 continue
 
-        # E. Create Document Parent Node
+        # D. Create Document Parent Node
         doc_node = {
             "id": filename,
             "label": filename,
@@ -124,12 +185,12 @@ class GraphService:
         }
         all_entities.append(doc_node)
 
-        # F. Bulk Save
+        # E. Bulk Save
         if all_entities:
-            logger.info(f"Saving {len(all_entities)} entities and {len(all_relationships)} relationships...")
+            print(f"--- Saving {len(all_entities)} entities to DB... ---", flush=True)
             await self.add_entities(all_entities)
             await self.add_relationships(all_relationships)
-            logger.info(f"File '{filename}' successfully ingested!")
+            print(f"--- Success! '{filename}' ingested. ---", flush=True)
         else:
             logger.warning("AI found no entities.")
 
@@ -144,7 +205,6 @@ class GraphService:
     # 2. Graph Lifecycle
     # -------------------------
     async def clear_graph(self, scope: str = "all") -> bool:
-        """Clear graph data based on scope."""
         logger.info(f"GraphService: clearing graph with scope: {scope}")
         return await self.repo.clear_graph(scope)
 
@@ -152,11 +212,9 @@ class GraphService:
     # 3. Entity Logic
     # -------------------------
     async def add_entities(self, entities: List[Dict[str, Any]]) -> None:
-        """Add multiple entities with normalization."""
         logger.info("GraphService: adding %d entities", len(entities))
 
         for entity in entities:
-            # Auto-generate ID if missing
             if "id" not in entity or not entity["id"]:
                 entity["id"] = str(uuid.uuid4())
 
@@ -168,17 +226,15 @@ class GraphService:
             
             if "properties" not in entity: entity["properties"] = {}
             
-            # Store standardized type and original label
             entity["properties"]["type"] = clean_type
             entity["properties"]["normType"] = clean_type 
             entity["properties"]["label"] = raw_label 
 
             self._validate_entity(entity)
             
-            # Persist
             await self.repo.create_entity(
                 entity_id=entity["id"],
-                label=clean_type,           
+                label=clean_type,            
                 properties=entity["properties"]
             )
 
@@ -188,11 +244,8 @@ class GraphService:
     async def delete_entity(self, entity_id: str):
         return await self.repo.delete_entity(entity_id)
 
-    # --- DOCUMENT DELETION (The Loop) ---
+    # --- DOCUMENT DELETION ---
     async def delete_document_data(self, doc_id: str) -> int:
-        """
-        Deletes the document node AND all child nodes tagged with its ID.
-        """
         logger.info(f"Starting cleanup for document: {doc_id}")
         
         all_entities = await self.repo.get_entities()
@@ -202,12 +255,10 @@ class GraphService:
             nid = str(entity.get("id", ""))
             props = entity.get("properties", {})
             
-            # Check A: Is this the document node itself?
             if nid == doc_id:
                 ids_to_delete.append(nid)
                 continue
 
-            # Check B: Is this a child node?
             child_doc_ref = props.get("documentId")
             if isinstance(child_doc_ref, list) and len(child_doc_ref) > 0:
                 child_doc_ref = child_doc_ref[0]
@@ -240,10 +291,8 @@ class GraphService:
     async def add_relationship(self, from_id: str, to_id: str, rel_type: str, properties: Dict[str, Any] = None):
         if not from_id or not to_id or not rel_type:
             raise ValueError("Missing required relationship fields")
-        
         rel_data = {"from": from_id, "to": to_id, "label": rel_type, "properties": properties}
         self._validate_relationship(rel_data)
-        
         return await self.repo.create_relationship(from_id, to_id, rel_type, properties)
 
     async def update_relationship(self, rel_id: str, properties: Dict[str, Any]):
@@ -257,7 +306,6 @@ class GraphService:
     # 5. Graph Queries
     # -------------------------
     async def get_graph(self) -> Dict[str, Any]:
-        """Fetch complete graph (normalized)."""
         logger.info("GraphService: fetching full graph")
         data = await self.repo.get_graph()
 
@@ -276,7 +324,6 @@ class GraphService:
         return data
 
     async def get_graph_for_document(self, doc_id: str) -> Dict[str, Any]:
-        """Fetches nodes/edges filtered by documentId."""
         return await self.repo.fetch_combined_graph(document_id=doc_id, limit=2000)
 
     async def search_nodes(self, query: str):

@@ -57,14 +57,22 @@ def create_app() -> FastAPI:
     app.include_router(graph_router) 
     app.include_router(docs_router)
 
-    # --- CRITICAL FIX 1: Root Health Check ---
+    # --- Root Health Check ---
     @app.get("/health")
     async def root_health_check():
         return {"status": "ok", "service": "Knowledge Graph Backend"}
 
-    # --- CRITICAL FIX 2: Root Clear Endpoint ---
+    # --- Root Endpoint (Fixes 404 logs) ---
+    @app.get("/")
+    async def root():
+        return {
+            "message": "Knowledge Graph Backend is running",
+            "docs_url": "/docs",
+            "health_url": "/health"
+        }
+
+    # --- Root Clear Endpoint ---
     # This captures the "POST /clear" request from your frontend
-    # FIX: Added default body to prevent 422 Unprocessable Entity
     @app.post("/clear")
     async def root_clear_graph(payload: Dict[str, Any] = Body(default={"scope": "all"})):
         try:
