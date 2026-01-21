@@ -17,63 +17,99 @@ logger = logging.getLogger(__name__)
 class GraphService:
     """
     Service layer for graph-related business logic.
-    Uses a 'Hybrid' approach: AI for extraction + Hardcoded Rules for strict typing.
+    Uses 'Hybrid' approach: AI Extraction + Schema Enforcement.
     """
 
     def __init__(self):
         self.repo = graph_repository
 
     # -------------------------
-    # 0. HYBRID SCHEMA MAPPER
+    # 0. HYBRID TYPING (Expanded Vocabulary)
     # -------------------------
     def _apply_hybrid_typing(self, entity: Dict[str, Any]) -> Dict[str, Any]:
         """
         Double-Lock Validation:
-        Overrides generic AI types (like 'Concept') with specific business types
-        based on known keywords from your CSV data.
+        Overrides generic AI types based on specific business keywords from your schema.
         """
         label = entity.get("label", "").strip()
+        label_lower = label.lower()
         
-        # 1. Detect Activities (Exact Matches)
+        # 1. Activities (Banking/Insurance Specifics)
         activities = [
-            "Outbound Call Started", "Call Ended (No Sale)", "Sale Closed", 
-            "Follow Up", "Meeting Booked"
+            "call", "sale", "follow", "meeting", "email", "started", "ended", "closed", 
+            "application", "activation", "payment", "invoice", "claim", "investigation",
+            "fnol", "assign", "reserve", "settlement", "renewal", "quote"
         ]
-        if label in activities:
+        if any(x in label_lower for x in activities):
             entity["type"] = "Activity"
             return entity
 
-        # 2. Detect Jobs/Roles
+        # 2. Jobs / Roles
         jobs = [
-            "management", "blue-collar", "technician", "admin.", 
-            "services", "retired", "self-employed", "unemployed", 
-            "entrepreneur", "housemaid", "student"
+            "management", "blue-collar", "technician", "admin", "services", 
+            "retired", "student", "housemaid", "entrepreneur", "agent", 
+            "underwriter", "adjuster", "rep"
         ]
-        if label.lower() in jobs:
+        if any(j in label_lower for j in jobs):
             entity["type"] = "Job"
             return entity
 
-        # 3. Detect Marital Status
-        statuses = ["married", "single", "divorced", "widowed"]
-        if label.lower() in statuses:
-            entity["type"] = "MaritalStatus"
+        # 3. Statuses / Outcomes / Risk
+        statuses = [
+            "married", "single", "divorced", "widowed", 
+            "success", "failure", "other", "no_result", "fraud", "cleared",
+            "active", "inactive", "rejected", "approved", "high", "medium", "low"
+        ]
+        if label_lower in statuses:
+            entity["type"] = "Status"
             return entity
 
-        # 4. Detect Outcomes
-        outcomes = ["No_Result", "failure", "success", "other"]
-        if label in outcomes:
-            entity["type"] = "Outcome"
+        # 4. Products / Account Types / Policies
+        products = [
+            "savings", "fixed deposit", "checking", "loan", "policy", 
+            "comprehensive", "collision", "corporate", "personal", "auto",
+            "life", "home"
+        ]
+        if any(p in label_lower for p in products):
+            entity["type"] = "Product"
             return entity
 
-        # 5. Detect Case IDs (Numeric strings)
-        if label.isdigit():
+        # 5. Financial / Amounts
+        # Matches currency or pure numbers that look like money (e.g. 5000.00)
+        if "balance" in label_lower or "premium" in label_lower or "amount" in label_lower:
+            entity["type"] = "Amount"
+            return entity
+        if re.match(r'^[\$€£]?\s*\d{1,3}(,\d{3})*(\.\d{1,2})?$', label):
+             if '.' in label or len(label) > 4: # Heuristic to avoid confusing Year/ID
+                 entity["type"] = "Amount"
+                 return entity
+
+        # 6. Branch / Location
+        if "branch" in label_lower or "region" in label_lower or "state" in label_lower:
+            entity["type"] = "Branch"
+            return entity
+        if re.match(r'^[Bb]\d+$', label): # B00019 -> Branch
+            entity["type"] = "Branch"
+            return entity
+
+        # 7. Case IDs (Numeric or "Case X")
+        # Logic: If it starts with 'A' (Account) or 'C' (Customer), treat appropriately
+        if re.match(r'^[Aa]\d+$', label):
+            entity["type"] = "Account"
+            return entity
+        if re.match(r'^[Cc]\d+$', label):
+            entity["type"] = "Customer"
+            return entity
+            
+        if label.isdigit() or label_lower.startswith("case"):
             entity["type"] = "Case"
-            entity["label"] = f"Case {label}" 
+            if label.isdigit(): entity["label"] = f"Case {label}" 
+            return entity
 
         return entity
 
     # -------------------------
-    # 1. Narrative Processing (With Live Updates)
+    # 1. Narrative Processing
     # -------------------------
     async def process_narrative(self, narrative_text: str, filename: str) -> Dict[str, Any]:
         """
@@ -82,7 +118,6 @@ class GraphService:
         logger.info(f"Starting graph processing for file: {filename}")
 
         if not narrative_text:
-            logger.warning(f"No text provided for {filename}")
             return {"status": "empty", "filename": filename}
 
         # A. Chunking
@@ -90,7 +125,7 @@ class GraphService:
         chunks = [narrative_text[i:i+CHUNK_SIZE] for i in range(0, len(narrative_text), CHUNK_SIZE)]
         total_chunks = len(chunks)
         
-        # Force print to ensure visibility immediately
+        # --- FIX: LIVE TERMINAL UPDATE ---
         print(f"--- Document split into {total_chunks} chunks. Starting AI... ---", flush=True)
 
         all_entities = []
@@ -112,8 +147,7 @@ class GraphService:
         for i, chunk in enumerate(chunks):
             current_step = i + 1
             
-            # --- LIVE UPDATE FIX: FORCE FLUSH ---
-            # This ensures the log appears instantly in the terminal
+            # --- FIX: LIVE TERMINAL UPDATE ---
             print(f"--> Processing Chunk {current_step}/{total_chunks} ({len(chunk)} chars)...", flush=True)
             
             try:
@@ -128,7 +162,7 @@ class GraphService:
                 for ent in extracted_entities:
                     # 1. Apply Hybrid Typing (Double-Lock)
                     ent = self._apply_hybrid_typing(ent)
-
+                    
                     raw_label = ent.get("label", "")
                     
                     # 2. Standardize Label

@@ -23,63 +23,54 @@ client = AsyncAzureOpenAI(
 )
 
 def _post_process_entity(ent: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Safety Layer: Fixes 'Job Mechanic' -> 'Mechanic' if the AI fails.
-    """
     label = str(ent.get("label", "")).strip()
     raw_type = str(ent.get("type", "Concept")).strip()
     
-    # 1. REMOVE PREFIXES (The Fix for your issue)
-    # If Type is "Job" and Label is "Job Mechanic", strip "Job"
+    # Prefix Cleaning
     if label.lower().startswith(raw_type.lower() + " "):
         clean_label = label[len(raw_type):].strip()
-        # Only apply if we didn't strip everything away (e.g., don't strip "Job" from "Job")
         if len(clean_label) > 1:
-            ent["label"] = clean_label
-            # Also Title Case it for consistency
-            ent["label"] = ent["label"].title()
+            ent["label"] = clean_label.title()
 
-    # 2. HANDLE "UNKNOWN" or "NONE"
     if ent["label"].lower() in ["unknown", "none", "n/a", "null"]:
         ent["label"] = "Unknown"
-
     return ent
 
 async def extract_entities_and_relationships(text: str) -> Dict[str, Any]:
-    logger.info(f"OpenAI extractor: processing text of length {len(text)}")
+    logger.info(f"OpenAI extractor: processing chunk of length {len(text)}")
     
-    # --- PROMPT: The Brain ---
     system_prompt = """
-    You are an expert Knowledge Graph Architect. Extract structured data from the text.
+    You are an expert Graph Database Architect. Extract entities and relationships from the text.
 
-    ### 1. SCHEMA CONSISTENCY RULES (CRITICAL)
-    The text often follows the pattern: "The **[Category]** is '**[Value]**'".
-    - **Rule A:** Use the **[Category]** as the **Entity Type**.
-    - **Rule B:** Use the **[Value]** as the **Entity Label**.
-    - **Rule C (NO REPETITION):** Do NOT include the Category in the Label.
-      - **Bad:** Type="Job", Label="Job Mechanic"
-      - **Good:** Type="Job", Label="Mechanic"
+    ### 1. RELATIONSHIP ENFORCEMENT
+    The text explicitly contains uppercase relationship verbs (e.g., "is PROFILED_AS"). 
+    **You MUST use these exact relationship names.**
+    
+    - If text says: "Case 1 is PROFILED_AS Job 'Management'"
+      -> Create Relation: {from: "Case 1", to: "Management", type: "PROFILED_AS"}
+    
+    - If text says: "Case 1 PERFORMS_ACTIVITY 'Call'"
+      -> Create Relation: {from: "Case 1", to: "Call", type: "PERFORMS_ACTIVITY"}
 
-    ### 2. CLASSIFICATION RULES
-    If the text is generic, classify into these Standard Types:
-    - **Person**: Names, Customers, Agents.
-    - **Job**: Roles like "Admin", "Technician", "Nurse", "Cleaner".
-    - **Organization**: Companies, Agencies.
-    - **Event**: Actions like "Call Started", "Sale Closed".
-    - **Location**: Cities, States.
-    - **Time**: Dates.
-    - **Case**: Case IDs.
-    - **Status**: "Married", "Single", "Active".
+    - If text says: "Activity 'Call' OCCURRED_ON Time '12:00'"
+      -> Create Relation: {from: "Call", to: "12:00", type: "OCCURRED_ON"}
 
-    ### 3. OUTPUT FORMAT
-    Return ONLY valid JSON:
+    ### 2. ENTITY TYPES
+    - **Case**: Numeric IDs.
+    - **Activity**: "Call Started", "Sale Closed", "Email".
+    - **Job**: "Management", "Technician".
+    - **Status**: "Single", "Married", "No_Result".
+    - **Product**: "Savings", "Loan".
+    - **Branch**: Location names.
+
+    ### 3. OUTPUT JSON
     {
-      "entities": [{"label": "Name", "type": "Type", "properties": {"description": "brief"}}],
-      "relationships": [{"from": "Entity1", "to": "Entity2", "type": "RELATION", "confidence": 1.0}]
+      "entities": [{"label": "Entity Name", "type": "Entity Type"}],
+      "relationships": [{"from": "Source", "to": "Target", "type": "RELATION_NAME"}]
     }
     """
 
-    user_prompt = f"Extract knowledge graph data from this text:\n\n{text}"
+    user_prompt = f"Extract graph data from this text:\n\n{text}"
 
     try:
         response = await client.chat.completions.create(
@@ -95,7 +86,6 @@ async def extract_entities_and_relationships(text: str) -> Dict[str, Any]:
 
         content = response.choices[0].message.content.strip()
         
-        # --- PARSING ---
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
@@ -104,15 +94,8 @@ async def extract_entities_and_relationships(text: str) -> Dict[str, Any]:
 
         validated = validate_extraction_result(data)
         
-        # --- POST-PROCESSING (The Safety Net) ---
-        raw_entities = validated.get("entities", [])
-        final_entities = []
-        
-        for ent in raw_entities:
-            # Apply the cleaning logic to every single entity
-            clean_ent = _post_process_entity(ent)
-            final_entities.append(clean_ent)
-
+        # Post-process
+        final_entities = [_post_process_entity(e) for e in validated.get("entities", [])]
         relationships = validated.get("relationships", [])
         
         logger.info(f"✅ Extracted: {len(final_entities)} entities, {len(relationships)} relationships")
