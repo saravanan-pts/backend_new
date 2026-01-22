@@ -16,10 +16,10 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY app ./app
 COPY README.md .
-
 RUN useradd -m myuser && chown -R myuser /app
 USER myuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# FIX: Force uvicorn to use the standard asyncio loop to allow nest_asyncio to work
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
