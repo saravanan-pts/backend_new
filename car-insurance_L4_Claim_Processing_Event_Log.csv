@@ -1,0 +1,102 @@
+case_id,Policy_ID,activity,timestamp,agent,claim_amount,accident_type,Channel,NPS,type_of_policy
+000112d5-9d04-450f-820f-3edfc0626cf9,CAR_POL_0223,First Notification of Loss (FNOL),2022-04-19 1:47:55,Hannah Lopez,9266.19,Head-on,Unknown_Channel,0,Comprehensive
+000112d5-9d04-450f-820f-3edfc0626cf9,CAR_POL_0223,Assign Claim,2022-05-01 18:11:26,Hannah Lopez,9266.19,Head-on,Unknown_Channel,0,Comprehensive
+000112d5-9d04-450f-820f-3edfc0626cf9,CAR_POL_0223,Claim Decision,2022-05-03 7:01:46,Hannah Lopez,9266.19,Head-on,Unknown_Channel,0,Comprehensive
+000112d5-9d04-450f-820f-3edfc0626cf9,CAR_POL_0223,Set Reserve,2022-05-08 9:26:47,Hannah Lopez,9266.19,Head-on,Unknown_Channel,0,Comprehensive
+000112d5-9d04-450f-820f-3edfc0626cf9,CAR_POL_0223,Payment Sent,2022-05-15 16:12:46,Hannah Lopez,9266.19,Head-on,Unknown_Channel,0,Comprehensive
+000112d5-9d04-450f-820f-3edfc0626cf9,CAR_POL_0223,Close Claim,2022-05-20 15:04:58,Hannah Lopez,9266.19,Head-on,Unknown_Channel,0,Comprehensive
+0001c62c-696c-4251-a604-8d319fc73fac,CAR_POL_0719,First Notification of Loss (FNOL),2023-02-15 11:04:01,Kimberly Baird,4636.3,Head-on,Unknown_Channel,0,Comprehensive
+0001c62c-696c-4251-a604-8d319fc73fac,CAR_POL_0719,Assign Claim,2023-02-28 10:14:29,Kimberly Baird,4636.3,Head-on,Unknown_Channel,0,Comprehensive
+0001c62c-696c-4251-a604-8d319fc73fac,CAR_POL_0719,Claim Decision,2023-03-05 8:58:14,Kimberly Baird,4636.3,Head-on,Unknown_Channel,0,Comprehensive
+0001c62c-696c-4251-a604-8d319fc73fac,CAR_POL_0719,Set Reserve,2023-03-06 6:19:41,Kimberly Baird,4636.3,Head-on,Unknown_Channel,0,Comprehensive
+0001c62c-696c-4251-a604-8d319fc73fac,CAR_POL_0719,Payment Sent,2023-03-12 7:47:39,Kimberly Baird,4636.3,Head-on,Unknown_Channel,0,Comprehensive
+0001c62c-696c-4251-a604-8d319fc73fac,CAR_POL_0719,Close Claim,2023-03-18 3:23:37,Kimberly Baird,4636.3,Head-on,Unknown_Channel,0,Comprehensive
+00048c02-65b5-423b-bf38-139a099a5624,CAR_POL_0426,First Notification of Loss (FNOL),2022-10-17 7:17:52,Patrick Downs,4897.7,Rear-end,Unknown_Channel,0,Comprehensive
+00048c02-65b5-423b-bf38-139a099a5624,CAR_POL_0426,Assign Claim,2022-10-30 4:02:22,Patrick Downs,4897.7,Rear-end,Unknown_Channel,0,Comprehensive
+00048c02-65b5-423b-bf38-139a099a5624,CAR_POL_0426,Claim Decision,2022-11-03 21:13:26,Patrick Downs,4897.7,Rear-end,Unknown_Channel,0,Comprehensive
+00048c02-65b5-423b-bf38-139a099a5624,CAR_POL_0426,Set Reserve,2022-11-05 11:13:23,Patrick Downs,4897.7,Rear-end,Unknown_Channel,0,Comprehensive
+00048c02-65b5-423b-bf38-139a099a5624,CAR_POL_0426,Payment Sent,2022-11-12 14:42:44,Patrick Downs,4897.7,Rear-end,Unknown_Channel,0,Comprehensive
+00048c02-65b5-423b-bf38-139a099a5624,CAR_POL_0426,Close Claim,2022-11-20 19:31:26,Patrick Downs,4897.7,Rear-end,Unknown_Channel,0,Comprehensive
+0005b367-5a31-4bcd-82f3-05103f43b462,CAR_POL_0056,First Notification of Loss (FNOL),2022-01-08 8:07:10,Jessica Ruiz,9596.03,Side-impact,Unknown_Channel,0,Collision
+0005b367-5a31-4bcd-82f3-05103f43b462,CAR_POL_0056,Assign Claim,2022-01-21 15:13:03,Jessica Ruiz,9596.03,Side-impact,Unknown_Channel,0,Collision
+0005b367-5a31-4bcd-82f3-05103f43b462,CAR_POL_0056,Claim Decision,2022-01-27 0:41:39,Jessica Ruiz,9596.03,Side-impact,Unknown_Channel,0,Collision
+0005b367-5a31-4bcd-82f3-05103f43b462,CAR_POL_0056,Set Reserve,2022-02-01 14:40:17,Jessica Ruiz,9596.03,Side-impact,Unknown_Channel,0,Collision
+0005b367-5a31-4bcd-82f3-05103f43b462,CAR_POL_0056,Payment Sent,2022-02-08 18:31:11,Jessica Ruiz,9596.03,Side-impact,Unknown_Channel,0,Collision
+0005b367-5a31-4bcd-82f3-05103f43b462,CAR_POL_0056,Close Claim,2022-02-14 0:06:18,Jessica Ruiz,9596.03,Side-impact,Unknown_Channel,0,Collision
+000694f5-9a75-4885-ab77-7842d78188ae,CAR_POL_0995,First Notification of Loss (FNOL),2020-06-25 2:15:16,Taylor Rose,7181.0,Rollover,Unknown_Channel,0,Collision
+000694f5-9a75-4885-ab77-7842d78188ae,CAR_POL_0995,Assign Claim,2020-07-08 15:00:49,Taylor Rose,7181.0,Rollover,Unknown_Channel,0,Collision
+000694f5-9a75-4885-ab77-7842d78188ae,CAR_POL_0995,Set Reserve,2020-07-13 8:26:44,Taylor Rose,7181.0,Rollover,Unknown_Channel,0,Collision
+000694f5-9a75-4885-ab77-7842d78188ae,CAR_POL_0995,Claim Decision,2020-07-14 20:07:34,Taylor Rose,7181.0,Rollover,Unknown_Channel,0,Collision
+000694f5-9a75-4885-ab77-7842d78188ae,CAR_POL_0995,Payment Sent,2020-07-15 17:05:42,Taylor Rose,7181.0,Rollover,Unknown_Channel,0,Collision
+000694f5-9a75-4885-ab77-7842d78188ae,CAR_POL_0995,Close Claim,2020-07-20 9:08:13,Taylor Rose,7181.0,Rollover,Unknown_Channel,0,Collision
+000771f4-d1b6-4d3e-a81b-31b792d1a98c,CAR_POL_0179,First Notification of Loss (FNOL),2020-11-06 10:02:47,Arthur Anderson,2778.8,Side-impact,Unknown_Channel,0,Comprehensive
+000771f4-d1b6-4d3e-a81b-31b792d1a98c,CAR_POL_0179,Assign Claim,2020-11-24 13:45:32,Arthur Anderson,2778.8,Side-impact,Unknown_Channel,0,Comprehensive
+000771f4-d1b6-4d3e-a81b-31b792d1a98c,CAR_POL_0179,Claim Decision,2020-11-29 23:25:15,Arthur Anderson,2778.8,Side-impact,Unknown_Channel,0,Comprehensive
+000771f4-d1b6-4d3e-a81b-31b792d1a98c,CAR_POL_0179,Set Reserve,2020-12-08 0:47:02,Arthur Anderson,2778.8,Side-impact,Unknown_Channel,0,Comprehensive
+000771f4-d1b6-4d3e-a81b-31b792d1a98c,CAR_POL_0179,Payment Sent,2020-12-12 20:01:46,Arthur Anderson,2778.8,Side-impact,Unknown_Channel,0,Comprehensive
+000771f4-d1b6-4d3e-a81b-31b792d1a98c,CAR_POL_0179,Close Claim,2020-12-17 19:28:50,Arthur Anderson,2778.8,Side-impact,Unknown_Channel,0,Comprehensive
+000bb4cc-ee97-4e5a-8a8e-ac2cca9c3569,CAR_POL_0681,First Notification of Loss (FNOL),2020-04-26 3:41:09,Jesus Tran,2629.64,Head-on,Unknown_Channel,0,Collision
+000bb4cc-ee97-4e5a-8a8e-ac2cca9c3569,CAR_POL_0681,Assign Claim,2020-05-11 20:29:10,Jesus Tran,2629.64,Head-on,Unknown_Channel,0,Collision
+000bb4cc-ee97-4e5a-8a8e-ac2cca9c3569,CAR_POL_0681,Claim Decision,2020-05-16 6:11:49,Jesus Tran,2629.64,Head-on,Unknown_Channel,0,Collision
+000bb4cc-ee97-4e5a-8a8e-ac2cca9c3569,CAR_POL_0681,Set Reserve,2020-05-22 1:24:17,Jesus Tran,2629.64,Head-on,Unknown_Channel,0,Collision
+000bb4cc-ee97-4e5a-8a8e-ac2cca9c3569,CAR_POL_0681,Payment Sent,2020-05-27 16:31:39,Jesus Tran,2629.64,Head-on,Unknown_Channel,0,Collision
+000bb4cc-ee97-4e5a-8a8e-ac2cca9c3569,CAR_POL_0681,Close Claim,2020-05-31 4:14:00,Jesus Tran,2629.64,Head-on,Unknown_Channel,0,Collision
+000c42da-1781-4faa-96cc-dac76d35ef04,CAR_POL_0105,First Notification of Loss (FNOL),2021-11-24 20:58:12,Mary Harvey,8893.71,Rollover,Unknown_Channel,0,Collision
+000c42da-1781-4faa-96cc-dac76d35ef04,CAR_POL_0105,Assign Claim,2021-12-11 12:42:42,Mary Harvey,8893.71,Rollover,Unknown_Channel,0,Collision
+000c42da-1781-4faa-96cc-dac76d35ef04,CAR_POL_0105,Claim Decision,2021-12-18 8:30:21,Mary Harvey,8893.71,Rollover,Unknown_Channel,0,Collision
+000c42da-1781-4faa-96cc-dac76d35ef04,CAR_POL_0105,Set Reserve,2021-12-19 21:31:16,Mary Harvey,8893.71,Rollover,Unknown_Channel,0,Collision
+000c42da-1781-4faa-96cc-dac76d35ef04,CAR_POL_0105,Payment Sent,2021-12-24 6:09:21,Mary Harvey,8893.71,Rollover,Unknown_Channel,0,Collision
+000c42da-1781-4faa-96cc-dac76d35ef04,CAR_POL_0105,Close Claim,2021-12-30 2:06:00,Mary Harvey,8893.71,Rollover,Unknown_Channel,0,Collision
+000f1f69-8808-445d-8339-33de46ea2f7a,CAR_POL_0581,First Notification of Loss (FNOL),2022-06-21 22:08:17,Nicholas Fletcher,4024.32,Rollover,Unknown_Channel,0,Collision
+000f1f69-8808-445d-8339-33de46ea2f7a,CAR_POL_0581,Assign Claim,2022-07-08 6:39:05,Nicholas Fletcher,4024.32,Rollover,Unknown_Channel,0,Collision
+000f1f69-8808-445d-8339-33de46ea2f7a,CAR_POL_0581,Claim Decision,2022-07-13 19:19:57,Nicholas Fletcher,4024.32,Rollover,Unknown_Channel,0,Collision
+000f1f69-8808-445d-8339-33de46ea2f7a,CAR_POL_0581,Set Reserve,2022-07-19 22:53:23,Nicholas Fletcher,4024.32,Rollover,Unknown_Channel,0,Collision
+000f1f69-8808-445d-8339-33de46ea2f7a,CAR_POL_0581,Payment Sent,2022-07-25 14:45:36,Nicholas Fletcher,4024.32,Rollover,Unknown_Channel,0,Collision
+000f1f69-8808-445d-8339-33de46ea2f7a,CAR_POL_0581,Close Claim,2022-08-01 5:43:13,Nicholas Fletcher,4024.32,Rollover,Unknown_Channel,0,Collision
+0011ffd8-81d3-4559-b6fb-126f1e4c0879,CAR_POL_0655,First Notification of Loss (FNOL),2020-11-19 22:48:26,Tiffany Lambert,4311.67,Rollover,Unknown_Channel,0,Collision
+0011ffd8-81d3-4559-b6fb-126f1e4c0879,CAR_POL_0655,Assign Claim,2020-12-02 11:14:04,Tiffany Lambert,4311.67,Rollover,Unknown_Channel,0,Collision
+0011ffd8-81d3-4559-b6fb-126f1e4c0879,CAR_POL_0655,Claim Decision,2020-12-08 2:20:23,Tiffany Lambert,4311.67,Rollover,Unknown_Channel,0,Collision
+0011ffd8-81d3-4559-b6fb-126f1e4c0879,CAR_POL_0655,Set Reserve,2020-12-12 15:39:17,Tiffany Lambert,4311.67,Rollover,Unknown_Channel,0,Collision
+0011ffd8-81d3-4559-b6fb-126f1e4c0879,CAR_POL_0655,Payment Sent,2020-12-18 0:35:23,Tiffany Lambert,4311.67,Rollover,Unknown_Channel,0,Collision
+0011ffd8-81d3-4559-b6fb-126f1e4c0879,CAR_POL_0655,Close Claim,2020-12-22 5:45:17,Tiffany Lambert,4311.67,Rollover,Unknown_Channel,0,Collision
+0014d7d8-fe2a-43d8-8b13-109cb93c5296,CAR_POL_0347,First Notification of Loss (FNOL),2022-12-18 21:57:15,Mary Turner,5994.44,Head-on,Unknown_Channel,0,Comprehensive
+0014d7d8-fe2a-43d8-8b13-109cb93c5296,CAR_POL_0347,Assign Claim,2023-01-05 9:17:42,Mary Turner,5994.44,Head-on,Unknown_Channel,0,Comprehensive
+0014d7d8-fe2a-43d8-8b13-109cb93c5296,CAR_POL_0347,Claim Decision,2023-01-11 9:00:44,Mary Turner,5994.44,Head-on,Unknown_Channel,0,Comprehensive
+0014d7d8-fe2a-43d8-8b13-109cb93c5296,CAR_POL_0347,Set Reserve,2023-01-14 8:01:23,Mary Turner,5994.44,Head-on,Unknown_Channel,0,Comprehensive
+0014d7d8-fe2a-43d8-8b13-109cb93c5296,CAR_POL_0347,Payment Sent,2023-01-18 11:29:46,Mary Turner,5994.44,Head-on,Unknown_Channel,0,Comprehensive
+0014d7d8-fe2a-43d8-8b13-109cb93c5296,CAR_POL_0347,Close Claim,2023-01-23 20:12:40,Mary Turner,5994.44,Head-on,Unknown_Channel,0,Comprehensive
+0016d5e0-661e-45a1-a116-af610a157613,CAR_POL_0525,First Notification of Loss (FNOL),2020-05-28 14:30:53,Barbara Osborne,8681.75,Rear-end,Unknown_Channel,0,Collision
+0016d5e0-661e-45a1-a116-af610a157613,CAR_POL_0525,Assign Claim,2020-06-11 20:40:08,Barbara Osborne,8681.75,Rear-end,Unknown_Channel,0,Collision
+0016d5e0-661e-45a1-a116-af610a157613,CAR_POL_0525,Claim Decision,2020-06-16 15:07:04,Barbara Osborne,8681.75,Rear-end,Unknown_Channel,0,Collision
+0016d5e0-661e-45a1-a116-af610a157613,CAR_POL_0525,Set Reserve,2020-06-19 20:02:12,Barbara Osborne,8681.75,Rear-end,Unknown_Channel,0,Collision
+0016d5e0-661e-45a1-a116-af610a157613,CAR_POL_0525,Payment Sent,2020-06-22 12:17:41,Barbara Osborne,8681.75,Rear-end,Unknown_Channel,0,Collision
+0016d5e0-661e-45a1-a116-af610a157613,CAR_POL_0525,Close Claim,2020-06-27 6:39:43,Barbara Osborne,8681.75,Rear-end,Unknown_Channel,0,Collision
+0019ec48-b0a4-4e72-bc55-9ba999a81382,CAR_POL_0456,First Notification of Loss (FNOL),2021-07-21 0:47:36,Elizabeth Rogers,1270.55,Rear-end,Unknown_Channel,0,Liability
+0019ec48-b0a4-4e72-bc55-9ba999a81382,CAR_POL_0456,Assign Claim,2021-08-04 20:26:34,Elizabeth Rogers,1270.55,Rear-end,Unknown_Channel,0,Liability
+0019ec48-b0a4-4e72-bc55-9ba999a81382,CAR_POL_0456,Claim Decision,2021-08-14 7:57:09,Elizabeth Rogers,1270.55,Rear-end,Unknown_Channel,0,Liability
+0019ec48-b0a4-4e72-bc55-9ba999a81382,CAR_POL_0456,Set Reserve,2021-08-20 18:14:13,Elizabeth Rogers,1270.55,Rear-end,Unknown_Channel,0,Liability
+0019ec48-b0a4-4e72-bc55-9ba999a81382,CAR_POL_0456,Payment Failed: Sanction Hit,2021-08-26 22:47:16,Elizabeth Rogers,1270.55,Rear-end,Unknown_Channel,0,Liability
+001ce6b1-111c-41cc-9c1b-656a901a6e30,CAR_POL_0001,First Notification of Loss (FNOL),2022-11-02 21:27:06,Charles Jackson,3020.84,Rear-end,Unknown_Channel,0,Liability
+001ce6b1-111c-41cc-9c1b-656a901a6e30,CAR_POL_0001,Assign Claim,2022-11-15 18:29:13,Charles Jackson,3020.84,Rear-end,Unknown_Channel,0,Liability
+001ce6b1-111c-41cc-9c1b-656a901a6e30,CAR_POL_0001,Claim Decision,2022-11-20 3:23:36,Charles Jackson,3020.84,Rear-end,Unknown_Channel,0,Liability
+001ce6b1-111c-41cc-9c1b-656a901a6e30,CAR_POL_0001,Set Reserve,2022-11-28 17:08:24,Charles Jackson,3020.84,Rear-end,Unknown_Channel,0,Liability
+001ce6b1-111c-41cc-9c1b-656a901a6e30,CAR_POL_0001,Payment Sent,2022-11-30 15:01:23,Charles Jackson,3020.84,Rear-end,Unknown_Channel,0,Liability
+001ce6b1-111c-41cc-9c1b-656a901a6e30,CAR_POL_0001,Close Claim,2022-12-04 11:51:15,Charles Jackson,3020.84,Rear-end,Unknown_Channel,0,Liability
+001fabc4-e984-467e-8e6c-44f4b9531ec4,CAR_POL_0099,First Notification of Loss (FNOL),2022-12-19 4:22:11,Robert Lewis,2482.25,Rear-end,Unknown_Channel,0,Liability
+001fabc4-e984-467e-8e6c-44f4b9531ec4,CAR_POL_0099,Assign Claim,2023-01-01 9:19:05,Robert Lewis,2482.25,Rear-end,Unknown_Channel,0,Liability
+001fabc4-e984-467e-8e6c-44f4b9531ec4,CAR_POL_0099,Claim Decision,2023-01-09 5:37:35,Robert Lewis,2482.25,Rear-end,Unknown_Channel,0,Liability
+001fabc4-e984-467e-8e6c-44f4b9531ec4,CAR_POL_0099,Set Reserve,2023-01-13 22:06:18,Robert Lewis,2482.25,Rear-end,Unknown_Channel,0,Liability
+001fabc4-e984-467e-8e6c-44f4b9531ec4,CAR_POL_0099,Payment Sent,2023-01-20 8:55:11,Robert Lewis,2482.25,Rear-end,Unknown_Channel,0,Liability
+001fabc4-e984-467e-8e6c-44f4b9531ec4,CAR_POL_0099,Close Claim,2023-01-25 22:28:17,Robert Lewis,2482.25,Rear-end,Unknown_Channel,0,Liability
+001fd226-cc8d-4a38-a712-be681487f6c2,CAR_POL_0895,First Notification of Loss (FNOL),2022-07-30 0:11:55,Edward Murray,6925.59,Rollover,Unknown_Channel,0,Liability
+001fd226-cc8d-4a38-a712-be681487f6c2,CAR_POL_0895,Assign Claim,2022-08-15 8:59:27,Edward Murray,6925.59,Rollover,Unknown_Channel,0,Liability
+001fd226-cc8d-4a38-a712-be681487f6c2,CAR_POL_0895,Claim Decision,2022-08-24 0:09:49,Edward Murray,6925.59,Rollover,Unknown_Channel,0,Liability
+001fd226-cc8d-4a38-a712-be681487f6c2,CAR_POL_0895,Set Reserve,2022-08-30 23:19:44,Edward Murray,6925.59,Rollover,Unknown_Channel,0,Liability
+001fd226-cc8d-4a38-a712-be681487f6c2,CAR_POL_0895,Payment Sent,2022-09-03 3:33:40,Edward Murray,6925.59,Rollover,Unknown_Channel,0,Liability
+001fd226-cc8d-4a38-a712-be681487f6c2,CAR_POL_0895,Close Claim,2022-09-07 22:06:31,Edward Murray,6925.59,Rollover,Unknown_Channel,0,Liability
+002157e8-e929-446b-98b9-966af2efbe8d,CAR_POL_0386,First Notification of Loss (FNOL),2022-09-22 12:03:30,Amy Robinson,6346.37,Side-impact,Unknown_Channel,0,Liability
+002157e8-e929-446b-98b9-966af2efbe8d,CAR_POL_0386,Assign Claim,2022-10-05 3:49:23,Amy Robinson,6346.37,Side-impact,Unknown_Channel,0,Liability
+002157e8-e929-446b-98b9-966af2efbe8d,CAR_POL_0386,Claim Decision,2022-10-10 2:53:23,Amy Robinson,6346.37,Side-impact,Unknown_Channel,0,Liability
+002157e8-e929-446b-98b9-966af2efbe8d,CAR_POL_0386,Set Reserve,2022-10-13 18:17:09,Amy Robinson,6346.37,Side-impact,Unknown_Channel,0,Liability
+002157e8-e929-446b-98b9-966af2efbe8d,CAR_POL_0386,Payment Sent,2022-10-18 0:48:14,Amy Robinson,6346.37,Side-impact,Unknown_Channel,0,Liability
+002157e8-e929-446b-98b9-966af2efbe8d,CAR_POL_0386,Close Claim,2022-10-22 22:27:05,Amy Robinson,6346.37,Side-impact,Unknown_Channel,0,Liability
