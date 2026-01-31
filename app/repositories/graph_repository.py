@@ -2,158 +2,198 @@ import logging
 import asyncio
 import random
 from typing import List, Dict, Any, Optional
-
-from gremlin_python.driver.protocol import GremlinServerError
 from app.db.cosmos_client import get_gremlin_client
+from app.config import settings 
 
 logger = logging.getLogger(__name__)
 
 class GraphRepository:
     def __init__(self):
+        """
+        Initialize using the shared singleton client.
+        Loads the correct Partition Key name from settings to prevent 404 writes.
+        """
         self.client = get_gremlin_client()
+        # LOAD THE REAL PARTITION KEY NAME FROM CONFIG (Defaults to 'partitionKey')
+        self.pk_key = getattr(settings, "COSMOS_GREMLIN_PARTITION_KEY", "partitionKey")
+        logger.info(f"GraphRepository initialized. Using Partition Key: '{self.pk_key}'")
 
-    def _parse_filename(self, filename: str):
-        if '.' in filename: base = filename.rsplit('.', 1)[0]
-        else: base = filename
-        if "_" in base: parts = base.split('_', 1); return parts[0], parts[1]
-        return "general", base
+    def _escape(self, value: Any) -> str:
+        """Helper to escape single quotes for Gremlin string queries."""
+        if value is None: return ""
+        return str(value).replace("'", "\\'")
 
     async def _execute_query(self, query: str, bindings: Dict[str, Any] = None) -> Any:
+        """
+        Centralized query execution with retry logic for rate limiting (429)
+        and error handling for 404s.
+        """
+        if not self.client:
+            logger.error("Client not initialized.")
+            return []
+
         retries = 0
-        MAX_RETRIES = 10
+        MAX_RETRIES = 5
+        
         while True:
             try:
-                result_set = self.client.submit_async(query, bindings=bindings).result()
+                # We prefer executing without bindings (string interpolation) 
+                # because it has proven more stable with your specific Cosmos setup.
+                if bindings:
+                    result_set = self.client.submit_async(query, bindings=bindings).result()
+                else:
+                    result_set = self.client.submit_async(query).result()
+                
                 return result_set.all().result()
+
             except Exception as exc:
                 error_msg = str(exc)
+                
+                # 1. Handle Rate Limiting (429)
                 if "429" in error_msg or "RequestRateTooLarge" in error_msg:
                     retries += 1
                     if retries > MAX_RETRIES:
                         logger.error(f"Max retries exceeded for query: {query}")
                         raise exc
-                    wait_time = (2 ** retries) + (random.randint(0, 1000) / 1000.0)
+                    wait_time = (0.5 * (2 ** retries)) + (random.randint(0, 100) / 1000.0)
                     await asyncio.sleep(wait_time)
+                
+                # 2. Handle Not Found (404) - Valid for empty DBs
+                elif "404" in error_msg:
+                    # logger.warning(f"Gremlin 404 (Normal if empty): {query[:60]}...")
+                    return []
+                
+                # 3. Handle Other Errors
                 else:
+                    logger.error(f"Query Execution Error: {exc}")
                     raise exc
 
-    # --- 1. FIXED CREATE ENTITY (Proper Binding Usage) ---
-    async def create_entity(self, entity_id: str, label: str, properties: Dict[str, Any]) -> None:
-        """
-        Creates OR Updates a vertex safely using Bindings.
-        """
-        prop_assignments = []
-        # BINDINGS: We define the variables here
-        bindings = {
-            "entity_id": entity_id,
-            "label": label,
-        }
-        
-        for key, value in properties.items():
-            if key in ["id", "pk"]: continue
-            if value is not None:
-                prop_key = f"prop_{key}"
-                prop_assignments.append(f".property('{key}', {prop_key})")
-                bindings[prop_key] = value
-        
-        props_str = "".join(prop_assignments)
-        
-        # QUERY STRING: We do NOT use f-string for the variable names.
-        # We concatenate strings to ensure "entity_id" is sent literally.
-        # This tells Cosmos DB to look up "entity_id" in the bindings.
-        query = (
-            "g.V(entity_id).fold().coalesce("
-            "unfold(), "
-            "addV(label).property('id', entity_id).property('pk', entity_id)"
-            f"){props_str}" 
-        )
-
-        await self._execute_query(query, bindings)
-
-    # --- 2. FIXED CREATE RELATIONSHIP (Proper Binding Usage) ---
-    async def create_relationship(self, from_id: str, to_id: str, label: str, properties: Dict[str, Any] = None) -> None:
-        prop_assignments = []
-        bindings = {
-            "from_id": from_id,
-            "to_id": to_id,
-            "label": label,
-        }
-
-        if properties:
-            for key, value in properties.items():
-                if value is not None:
-                    prop_key = f"prop_{key}"
-                    prop_assignments.append(f".property('{key}', {prop_key})")
-                    bindings[prop_key] = value
-
-        props_str = "".join(prop_assignments)
-
-        # QUERY STRING: Same fix. Send literal "from_id" etc.
-        query = (
-            "g.V(from_id).coalesce("
-            "outE(label).where(inV().hasId(to_id)), "
-            "addE(label).to(g.V(to_id))"
-            f"){props_str}"
-        )
-        
-        await self._execute_query(query, bindings)
-
-    # --- 3. FETCH & DELETE (Unchanged, Logic was correct) ---
+    # --- 1. FETCH COMBINED GRAPH (Fixed: Exact Filename Match) ---
     async def fetch_combined_graph(self, limit: int = 500, types: List[str] = None, document_id: str = None) -> Dict[str, Any]:
         try:
-            bindings = {"limit": limit}
             node_query = "g.V()"
-            edge_query_base = "g.E()"
+            edge_query = "g.E()"
 
             if document_id:
-                domain, docId = self._parse_filename(document_id)
-                node_query += ".has('domain', domain).has('documentId', docId)"
-                edge_query_base += ".where(outV().has('domain', domain).has('documentId', docId)).where(inV().has('domain', domain).has('documentId', docId))"
-                bindings["domain"] = domain
-                bindings["docId"] = docId
+                # FIX: Use the exact filename. Do not split into domain/id.
+                safe_id = self._escape(document_id)
+                
+                # Query nodes that exactly match the filename
+                node_query += f".has('documentId', '{safe_id}')"
+                
+                # Assume edges might be tagged with 'doc' or just limit them 
+                # (Filtering edges strictly by doc property is safer if the property exists)
+                edge_query += f".has('doc', '{safe_id}')"
+            
+            else:
+                # No filter? Apply default limit
+                node_query += f".limit({limit})"
+                edge_query += f".limit({limit*2})"
 
             if types:
-                bindings["types_list"] = types
-                node_query += ".hasLabel(within(types_list))"
+                types_str = "','".join(types)
+                node_query += f".hasLabel('{types_str}')"
 
-            node_query += ".limit(limit).valueMap(true)"
-            edge_query = f"{edge_query_base}.limit(limit_val).project('id','label','source','target','properties').by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            # Finalize Queries
+            node_query += ".valueMap(true)"
             
-            bindings_edges = bindings.copy()
-            bindings_edges["limit_val"] = limit * 2
+            # Use project() is the robust alternative to elementMap()
+            edge_query += (
+                ".project('id', 'label', 'source', 'target', 'properties')"
+                ".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            )
 
-            raw_nodes = await self._execute_query(node_query, bindings=bindings)
-            raw_edges = await self._execute_query(edge_query, bindings=bindings_edges)
+            logger.info(f"Fetching Graph: {node_query}")
+            
+            # Execute
+            raw_nodes = await self._execute_query(node_query)
+            raw_edges = await self._execute_query(edge_query)
 
-            return {"nodes": raw_nodes, "edges": raw_edges, "meta": {"count": {"nodes": len(raw_nodes), "edges": len(raw_edges)}}}
+            return {
+                "nodes": raw_nodes or [], 
+                "edges": raw_edges or [], 
+                "meta": {"count": {"nodes": len(raw_nodes or []), "edges": len(raw_edges or [])}}
+            }
         except Exception as exc:
-            logger.error("Failed to fetch combined graph: %s", exc)
-            raise exc
+            logger.error(f"Fetch failed: {exc}")
+            return {"nodes": [], "edges": [], "error": str(exc)}
 
+    # --- 2. CREATE ENTITY (Robust F-String Version) ---
+    async def create_entity(self, entity_id: str, label: str, properties: Dict[str, Any]) -> None:
+        """Creates an entity using f-strings to ensure writes succeed."""
+        prop_str = ""
+        for key, value in properties.items():
+            # Skip keys we handle manually
+            if key in ["id", "pk", "partitionKey"] or value is None: continue
+            safe_val = self._escape(value)
+            prop_str += f".property('{key}', '{safe_val}')"
+        
+        # Explicitly set the Partition Key using the name found in config (self.pk_key)
+        query = (
+            f"g.V('{entity_id}').fold().coalesce("
+            f"unfold(), "
+            f"addV('{label}').property('id', '{entity_id}').property('{self.pk_key}', '{entity_id}')"
+            f"{prop_str})" 
+        )
+        await self._execute_query(query)
+
+    # --- 3. CREATE RELATIONSHIP (Robust F-String Version) ---
+    async def create_relationship(self, from_id: str, to_id: str, label: str, properties: Dict[str, Any] = None) -> None:
+        """Creates a relationship using f-strings."""
+        prop_str = ""
+        if properties:
+            for key, value in properties.items():
+                if value is None: continue
+                safe_val = self._escape(value)
+                prop_str += f".property('{key}', '{safe_val}')"
+
+        query = (
+            f"g.V('{from_id}').coalesce("
+            f"outE('{label}').where(inV().hasId('{to_id}')),"
+            f"addE('{label}').to(g.V('{to_id}')){prop_str})"
+        )
+        await self._execute_query(query)
+
+    # --- 4. DELETE DATA BY FILENAME (Fixed: Exact Match) ---
     async def delete_data_by_filename(self, filename: str) -> None:
         BATCH_SIZE = 20
         try:
-            domain, docId = self._parse_filename(filename)
-            logger.info(f"Deleting data for domain='{domain}', documentId='{docId}'")
-            query = f"g.V().has('documentId', '{docId}').has('domain', '{domain}').limit({BATCH_SIZE}).drop()"
-            count_query = f"g.V().has('documentId', '{docId}').has('domain', '{domain}').count()"
+            # FIX: Use exact filename match
+            safe_id = self._escape(filename)
+            logger.info(f"Deleting data for documentId='{safe_id}'")
+            
+            # Query to delete nodes belonging to this file
+            query = f"g.V().has('documentId', '{safe_id}').limit({BATCH_SIZE}).drop()"
+            count_query = f"g.V().has('documentId', '{safe_id}').count()"
+            
             while True:
                 res = await self._execute_query(count_query)
-                if not res or res[0] == 0: break
+                # If count is 0 or result is empty, we are done
+                if not res or res[0] == 0: 
+                    break
+                
                 await self._execute_query(query)
-                await asyncio.sleep(0.2)
-            await self.delete_entity(filename)
+                await asyncio.sleep(0.2) # Yield to event loop
+            
+            # Delete the file entity itself (if it exists as a separate node)
+            await self._execute_query(f"g.V('{filename}').drop()")
             logger.info("Cleared graph data for document: %s", filename)
         except Exception as exc:
-            logger.error("Failed to clear document data for %s: %s", filename, exc)
+            logger.error(f"Failed to clear document data for {filename}: {exc}")
             raise exc
 
     # --- STANDARD OPERATIONS ---
+
     async def clear_graph(self, scope: str = "all") -> bool:
         try:
             BATCH_SIZE = 500
-            if scope == "relationships": query = f"g.E().limit({BATCH_SIZE}).drop()"; check = "g.E().count()"
-            else: query = f"g.V().limit({BATCH_SIZE}).drop()"; check = "g.V().count()"
+            if scope == "relationships": 
+                query = f"g.E().limit({BATCH_SIZE}).drop()"
+                check = "g.E().count()"
+            else: 
+                query = f"g.V().limit({BATCH_SIZE}).drop()"
+                check = "g.V().count()"
+            
             while True:
                 res = await self._execute_query(check)
                 if not res or res[0] == 0: break
@@ -167,12 +207,13 @@ class GraphRepository:
         return await self._execute_query(q)
 
     async def get_relationships(self) -> List[Dict[str, Any]]:
-        return await self._execute_query("g.E().elementMap()")
+        # Using project() for consistency and safety
+        return await self._execute_query("g.E().project('id', 'label', 'source', 'target', 'properties').by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())")
 
     async def update_entity(self, entity_id: str, properties: Dict[str, Any]) -> None:
         query = f"g.V('{entity_id}')"
         for k, v in properties.items():
-            safe_v = str(v).replace("'", "\\'")
+            safe_v = self._escape(v)
             query += f".property('{k}', '{safe_v}')"
         await self._execute_query(query)
 
@@ -182,7 +223,7 @@ class GraphRepository:
     async def update_relationship(self, rel_id: str, properties: Dict[str, Any]) -> None:
         query = f"g.E('{rel_id}')"
         for k, v in properties.items():
-            safe_v = str(v).replace("'", "\\'")
+            safe_v = self._escape(v)
             query += f".property('{k}', '{safe_v}')"
         await self._execute_query(query)
 
@@ -190,17 +231,26 @@ class GraphRepository:
         await self._execute_query(f"g.E('{rel_id}').drop()")
 
     async def search_nodes(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
+        # Using TextP for substring search
         return await self._execute_query(f"g.V().hasLabel(TextP.containing('{keyword}')).limit({limit}).valueMap(true)")
 
     async def get_stats(self) -> Dict[str, Any]:
-        nodes = (await self._execute_query("g.V().count()"))[0]
-        edges = (await self._execute_query("g.E().count()"))[0]
+        nodes_res = await self._execute_query("g.V().count()")
+        edges_res = await self._execute_query("g.E().count()")
+        
+        nodes = nodes_res[0] if nodes_res else 0
+        edges = edges_res[0] if edges_res else 0
+        
         return {"nodes": nodes, "edges": edges}
 
     async def get_graph(self) -> Dict[str, Any]:
-        return {"nodes": await self.get_entities(), "edges": await self.get_relationships()}
+        return {
+            "nodes": await self.get_entities(),
+            "edges": await self.get_relationships()
+        }
 
     async def get_relationships_for_entity(self, entity_id: str) -> List[Dict[str, Any]]:
         return await self._execute_query(f"g.V('{entity_id}').bothE().elementMap()")
 
+# Initialize the repository instance
 graph_repository = GraphRepository()

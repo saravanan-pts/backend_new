@@ -36,3 +36,7 @@ dist/
 
 # SQLite / DB files
 *.db
+debug_cosmos.py
+debug_write.py
+find_pk.py
+*.csv

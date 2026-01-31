@@ -21,10 +21,16 @@ def get_gremlin_client() -> client.Client:
         return _gremlin_client
 
     # ---- Load configuration from settings ----
-    endpoint = settings.COSMOS_GREMLIN_ENDPOINT
-    key = settings.COSMOS_GREMLIN_KEY
-    database = settings.COSMOS_GREMLIN_DATABASE
-    container = settings.COSMOS_GREMLIN_CONTAINER
+    # FIX: Strip trailing slash to prevent connection errors (wss://...//gremlin)
+    raw_endpoint = str(settings.COSMOS_GREMLIN_ENDPOINT).strip()
+    if raw_endpoint.endswith('/'):
+        endpoint = raw_endpoint[:-1]
+    else:
+        endpoint = raw_endpoint
+
+    key = str(settings.COSMOS_GREMLIN_KEY).strip()
+    database = str(settings.COSMOS_GREMLIN_DATABASE).strip()
+    container = str(settings.COSMOS_GREMLIN_CONTAINER).strip()
 
     # ---- Fail fast if config is missing ----
     if not all([endpoint, key, database, container]):
@@ -36,6 +42,10 @@ def get_gremlin_client() -> client.Client:
 
     # ---- Build resource path ----
     username = f"/dbs/{database}/colls/{container}"
+    
+    # DEBUG: Print connection details to verify the slash is gone
+    print(f"DEBUG: Connecting to Endpoint: '{endpoint}'")
+    print(f"DEBUG: Connecting as User:     '{username}'")
 
     # ---- Create Gremlin client ----
     try:
