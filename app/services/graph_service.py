@@ -1,12 +1,13 @@
 import logging
 import uuid
 import re
+import asyncio
 import pandas as pd
 from typing import List, Dict, Any, Optional
 from io import StringIO
 
+from app.config import settings
 from app.repositories.graph_repository import graph_repository
-from app.utils.normalizer import normalize_entity_type
 from app.services.document_processor import document_processor
 from app.services.openai_extractor import extract_entities_and_relationships
 
@@ -14,69 +15,47 @@ logger = logging.getLogger(__name__)
 
 class GraphService:
     """
-    FINAL GRAPH ENGINE (Strict Typing Fix)
-    - Enforces clean Labels (Line 1).
-    - Enforces strict Types (Line 2).
-    - Fixes the "Paragraph in ID" bug.
+    FINAL GRAPH ENGINE (Strict Isolation + Sequence Logic)
+    - Fixes 'Spiderweb': Case IDs cannot be attributes.
+    - Features: 
+        1. Grouping: Click 'Branch B1' -> See all Cases.
+        2. Sequence: Adds 'NEXT_STEP' edges between Activities (Process Mining).
     """
 
     def __init__(self):
         self.repo = graph_repository
-        
-        # 15-FILE SCHEMA
-        self.RELATIONSHIP_SCHEMA = {
-            ("case", "branch"): "PROCESSED_AT",
-            ("case", "account_type"): "CLASSIFIED_AS",
-            ("case", "product"): "CLASSIFIED_AS",
-            ("case", "activity"): "PERFORMS_ACTIVITY",
-            ("case", "customer"): "INITIATED_BY",
-            ("case", "agent"): "HANDLED_BY",
-            ("case", "outcome"): "RESULTED_IN",
-            ("customer", "branch"): "BANKING_AT",
-            ("customer", "account_type"): "HOLDS_ACCOUNT",
-            ("account_number", "loan_amount"): "VALUED_AT",
-            ("loan_type", "region"): "RECOVERS_IN",
-            ("activity", "outcome"): "VALIDATES_OUTCOME"
-        }
+        self.PARTITION_KEY = getattr(settings, "COSMOS_GREMLIN_PARTITION_KEY", "pk")
 
-    # --- 1. STRICT ID GENERATOR ---
     def _clean_id(self, prefix: str, value: str) -> str:
-        """Forces short, readable IDs."""
-        clean_val = str(value).strip().lower()
-        clean_val = re.sub(r'[^a-z0-9]', '_', clean_val)
-        clean_val = re.sub(r'_+', '_', clean_val).strip('_')
-        return f"{prefix.lower()}_{clean_val}"
+        clean_val = str(value).strip()
+        safe_val = re.sub(r'[^a-zA-Z0-9]', '_', clean_val)
+        return f"{prefix}_{safe_val}"
 
-    # --- 2. STRICT TYPE DETECTOR ---
     def _detect_type(self, header: str, value: str) -> str:
         h = header.lower()
         v = str(value).lower()
-        if "case" in h or ("id" in h and v.startswith("a0")): return "Case"
         if "customer" in h: return "Customer"
         if "branch" in h: return "Branch"
         if "activity" in h or "action" in h: return "Activity"
-        if "timestamp" in h or "date" in h: return "Time"
+        if "time" in h or "date" in h: return "Time"
         if "product" in h or "account_type" in h: return "Product"
-        if "amount" in h or "balance" in h: return "Amount"
-        if "status" in h or "outcome" in h: return "Status"
+        if "balance" in h or "amount" in h: return "Amount"
+        
         if re.match(r'^b\d+$', v): return "Branch"
         if re.match(r'^c\d+$', v): return "Customer"
         if re.match(r'\d{4}-\d{2}-\d{2}', v): return "Time"
-        return "Concept"
+        return "Attribute"
 
-    # --- 3. MAIN PROCESSOR ---
     async def process_narrative(self, narrative_text: str, filename: str) -> Dict[str, Any]:
         logger.info(f"Processing: {filename}")
         domain = filename.split('_')[0] if "_" in filename else "general"
 
         if filename.lower().endswith(".csv") or "," in narrative_text:
             return await self._process_csv_graph(narrative_text, filename, domain)
-        
         return await self._process_unstructured_text(narrative_text, filename, domain)
 
-    # --- 4. THE STAR-CHAIN ENGINE (Fixed Types) ---
     async def _process_csv_graph(self, csv_text: str, filename: str, domain: str):
-        print(f"--- STAR-CHAIN ENGINE: Processing {filename} ---", flush=True)
+        print(f"--- PROCESS FLOW ENGINE: Processing {filename} ---", flush=True)
         try:
             df = pd.read_csv(StringIO(csv_text))
         except:
@@ -88,101 +67,166 @@ class GraphService:
         time_col = next((c for c in df.columns if "time" in c or "date" in c), None)
         act_col  = next((c for c in df.columns if "activity" in c or "action" in c), None)
 
+        # 1. SORTING IS CRITICAL FOR 'NEXT_STEP' LOGIC
         if time_col:
             df[time_col] = pd.to_datetime(df[time_col])
             df = df.sort_values(by=[case_col, time_col])
 
+        # 2. Ban-List to prevent Spiderweb
+        all_case_ids_banlist = set(df[case_col].astype(str).str.strip().unique())
+
         all_entities = []
         all_relationships = []
-        last_event_map = {} 
+        created_nodes = set()
+        created_edges = set()
+
+        # 3. Sequence Tracker: Stores { case_id: "Activity_Node_ID" }
+        case_activity_tracker = {}
+
+        # A. DOCUMENT NODE
+        doc_id = filename
+        all_entities.append({
+            "id": doc_id, 
+            "label": filename, 
+            "type": "Document",
+            "properties": {
+                "normType": "Document", 
+                "filename": filename, 
+                "documentId": filename,
+                "status": "processed",
+                self.PARTITION_KEY: domain
+            }
+        })
 
         total_rows = len(df)
+        
         for idx, row in df.iterrows():
             if idx % 50 == 0: print(f"Processing row {idx}/{total_rows}...", flush=True)
 
-            # --- A. NODES ---
-            
-            # 1. CASE NODE
+            # B. CASE NODE
             case_val = str(row[case_col]).strip()
-            case_id = self._clean_id("case", case_val)
-            all_entities.append({
-                "id": case_id, 
-                "label": case_val, # Clean Label
-                "type": "Case",    # Clean Type
-                "properties": {"normType": "Case", "domain": domain}
-            })
-
-            # 2. EVENT NODE (The Hub)
-            # FIX: Type is strictly "Event". Label is strict "Activity Name".
-            event_id = f"evt_{uuid.uuid4().hex[:8]}"
-            act_val = str(row[act_col]) if act_col else "Event"
-            time_val = str(row.get(time_col, ''))[:10]
+            case_id = self._clean_id("Case", case_val)
             
-            all_entities.append({
-                "id": event_id, 
-                "label": f"{act_val} ({time_val})", # This is Line 1
-                "type": "Event",                    # This is Line 2 (The Fix)
-                "properties": {
-                    "normType": "Event", 
-                    "domain": domain, 
-                    "timestamp": time_val,
-                    "activity_name": act_val
-                }
-            })
+            if case_id not in created_nodes:
+                all_entities.append({
+                    "id": case_id, 
+                    "label": case_val, 
+                    "type": "Case",     
+                    "properties": {
+                        "name": case_val, 
+                        "normType": "Case", 
+                        "domain": domain, 
+                        "documentId": filename, 
+                        self.PARTITION_KEY: domain 
+                    }
+                })
+                # Link Doc -> Case
+                edge_key = f"{doc_id}_{case_id}_CONTAINS"
+                if edge_key not in created_edges:
+                    all_relationships.append({"from": doc_id, "to": case_id, "label": "CONTAINS", "properties": {"doc": filename}})
+                    created_edges.add(edge_key)
+                created_nodes.add(case_id)
 
-            # --- B. RELATIONSHIPS ---
+            # C. TRACK CURRENT ACTIVITY FOR SEQUENCE
+            current_activity_id = None
 
-            # Case -> Event
-            all_relationships.append({"from": case_id, "to": event_id, "label": "HAS_EVENT", "properties": {"doc": filename}})
-
-            # Event -> Next Event
-            if case_id in last_event_map:
-                prev_id = last_event_map[case_id]
-                all_relationships.append({"from": prev_id, "to": event_id, "label": "NEXT_STEP", "properties": {"doc": filename, "type": "sequence"}})
-            last_event_map[case_id] = event_id
-
-            # Context Nodes
-            row_nodes = {}
+            # D. PROCESS COLUMNS
             for col in df.columns:
                 val = str(row[col]).strip()
-                if not val or val.lower() == "nan" or col == case_col: continue
+                if not val or val.lower() == "nan": continue
+                if col == case_col: continue # Skip Case Col
+                if val in all_case_ids_banlist: continue # BAN-LIST CHECK
 
                 node_type = self._detect_type(col, val)
-                node_id = self._clean_id(node_type, val) # Clean ID
-                
-                all_entities.append({
-                    "id": node_id, 
-                    "label": val,       # Clean Label
-                    "type": node_type,  # Clean Type
-                    "properties": {"normType": node_type}
-                })
-                row_nodes[node_type.lower()] = node_id
+                if node_type == "Amount": continue
 
-                rel = "INVOLVES"
-                if node_type == "Activity": rel = "IS_ACTIVITY"
-                elif node_type == "Time": rel = "OCCURRED_ON"
-                elif node_type == "Branch": rel = "AT_LOCATION"
-                
-                all_relationships.append({"from": event_id, "to": node_id, "label": rel, "properties": {"doc": filename}})
+                node_id = self._clean_id(node_type, val)
 
-            # Schema Shortcuts
-            for n_type, n_id in row_nodes.items():
-                if ("case", n_type) in self.RELATIONSHIP_SCHEMA:
-                    rel_name = self.RELATIONSHIP_SCHEMA[("case", n_type)]
-                    all_relationships.append({"from": case_id, "to": n_id, "label": rel_name, "properties": {"doc": filename, "type": "schema"}})
+                # Capture Activity ID for Sequence Logic
+                if node_type == "Activity":
+                    current_activity_id = node_id
+
+                # Create Context Node
+                if node_id not in created_nodes:
+                    all_entities.append({
+                        "id": node_id, 
+                        "label": val, 
+                        "type": node_type,  
+                        "properties": {
+                            "name": val, 
+                            "normType": node_type, 
+                            "documentId": filename, 
+                            self.PARTITION_KEY: domain
+                        }
+                    })
+                    # Link Doc -> Context
+                    edge_key = f"{doc_id}_{node_id}_HAS"
+                    if edge_key not in created_edges:
+                        all_relationships.append({"from": doc_id, "to": node_id, "label": f"HAS_{node_type.upper()}", "properties": {"doc": filename}})
+                        created_edges.add(edge_key)
+                    created_nodes.add(node_id)
+
+                # Link Case -> Context
+                rel_label = "LINKED_TO"
+                if node_type == "Branch": rel_label = "MANAGED_BY"
+                elif node_type == "Activity": rel_label = "PERFORMS"
+                elif node_type == "Product": rel_label = "HAS_PRODUCT"
+                elif node_type == "Customer": rel_label = "OWNED_BY"
+                elif node_type == "Time": rel_label = "OCCURRED_ON"
+
+                edge_unique_key = f"{case_id}_{node_id}_{rel_label}"
                 
-                for other_type, other_id in row_nodes.items():
-                    if (n_type, other_type) in self.RELATIONSHIP_SCHEMA:
-                        rel_name = self.RELATIONSHIP_SCHEMA[(n_type, other_type)]
-                        all_relationships.append({"from": n_id, "to": other_id, "label": rel_name, "properties": {"doc": filename, "type": "schema"}})
+                if node_type == "Activity":
+                    # Activities need history (allow duplicates)
+                    time_val = str(row.get(time_col, ''))[:10]
+                    all_relationships.append({
+                        "from": case_id, 
+                        "to": node_id, 
+                        "label": rel_label, 
+                        "properties": {"timestamp": time_val, "doc": filename}
+                    })
+                else:
+                    if edge_unique_key not in created_edges:
+                        all_relationships.append({
+                            "from": case_id, 
+                            "to": node_id, 
+                            "label": rel_label, 
+                            "properties": {"doc": filename}
+                        })
+                        created_edges.add(edge_unique_key)
+
+            # E. APPLY SEQUENCE LOGIC (NEXT_STEP)
+            # If we found an activity in this row, and we know the previous activity for this case:
+            if current_activity_id:
+                if case_id in case_activity_tracker:
+                    previous_activity_id = case_activity_tracker[case_id]
+                    
+                    # Create Edge: Previous Activity -> Current Activity
+                    # This builds the "Process Map" (Cause & Effect)
+                    if previous_activity_id != current_activity_id:
+                        # We use a global key because we want to see the general flow of the process
+                        seq_key = f"{previous_activity_id}_{current_activity_id}_NEXT_STEP"
+                        
+                        # We add it if not exists (General Flow) OR we can add per case.
+                        # Adding per case creates too many edges. Adding once shows the "Standard Process".
+                        if seq_key not in created_edges:
+                            all_relationships.append({
+                                "from": previous_activity_id,
+                                "to": current_activity_id,
+                                "label": "NEXT_STEP",
+                                "properties": {"doc": filename}
+                            })
+                            created_edges.add(seq_key)
+
+                # Update tracker for the next row
+                case_activity_tracker[case_id] = current_activity_id
 
         await self.add_entities(all_entities)
         await self.add_relationships(all_relationships)
         return {"filename": filename, "entities": len(all_entities)}
 
-    # --- UTILS ---
     async def _process_unstructured_text(self, text, filename, domain):
-        return {"status": "skipped", "msg": "AI Mode"}
+        return {"status": "skipped", "msg": "AI Mode not active"}
 
     async def add_entities(self, entities):
         seen = set()

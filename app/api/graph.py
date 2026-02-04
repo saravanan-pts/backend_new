@@ -1,8 +1,13 @@
-from fastapi import APIRouter, HTTPException, Body
-from typing import Dict, Any, List
+import uuid
 import logging
+from fastapi import APIRouter, HTTPException, Body
+from pydantic import BaseModel, Field
+from typing import Dict, Any, List, Optional, Literal
 
-# Import services
+# Import Configuration
+from app.config import settings
+
+# Import Services
 from app.services.graph_service import graph_service
 from app.services.graph_analytics import graph_analytics
 
@@ -10,38 +15,96 @@ router = APIRouter(prefix="/api/graph", tags=["Graph"])
 logger = logging.getLogger(__name__)
 
 # ==========================================
+# 0. DATA MODELS (Fixes Swagger UI & Validation)
+# ==========================================
+
+class FetchPayload(BaseModel):
+    limit: int = 1000
+    filters: Dict[str, Any] = {}
+    documentId: Optional[str] = None
+    document_id: Optional[str] = None
+
+class SearchPayload(BaseModel):
+    query: str
+
+class EntityPayload(BaseModel):
+    action: Literal["create", "update", "delete"] = Field(..., description="Action to perform")
+    data: Dict[str, Any] = Field(..., description="Entity data (id, label, properties)")
+    documentId: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "action": "create",
+                "documentId": "accounts_lifecycle_log.csv",
+                "data": {
+                    "label": "Person",
+                    "type": "User",
+                    "properties": {
+                        "name": "Janani",
+                        "role": "Admin",
+                        "score": 100
+                    }
+                }
+            }
+        }
+
+class RelationshipPayload(BaseModel):
+    action: Literal["create", "update", "delete"] = Field(..., description="Action to perform")
+    data: Dict[str, Any] = Field(..., description="Relationship data (source, target, label)")
+    documentId: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "action": "create",
+                "documentId": "accounts_lifecycle_log.csv",
+                "data": {
+                    "source": "uuid-of-person-node",
+                    "target": "uuid-of-account-node",
+                    "label": "OWNS",
+                    "properties": {
+                        "since": "2024-01-01"
+                    }
+                }
+            }
+        }
+
+class AnalysisPayload(BaseModel):
+    type: str
+    params: Dict[str, Any] = {}
+
+class DocumentPayload(BaseModel):
+    filename: str
+
+# ==========================================
 # 1. FETCH & SEARCH OPERATIONS
 # ==========================================
 
 @router.post("/fetch")
-async def fetch_graph(payload: Dict[str, Any] = Body(...)):
+async def fetch_graph(payload: FetchPayload):
     """
     Loads combined nodes and edges for the frontend map.
-    FIX: Now correctly reads 'documentId' from either the root payload OR nested filters.
+    Robustly reads 'documentId' from root, snake_case field, or nested filters.
     """
     try:
-        limit = payload.get("limit", 1000)
-        filters = payload.get("filters", {})
-        
-        # --- CRITICAL FIX FOR DROPDOWN ---
-        # The frontend might send 'documentId' in the root payload OR inside 'filters'.
-        # We check all possible locations to ensure filtering works.
-        document_id = (
-            payload.get("documentId") or 
-            payload.get("document_id") or 
-            filters.get("document_id")
+        # Check all possible locations for document_id to support various UI calls
+        doc_id = (
+            payload.documentId or 
+            payload.document_id or 
+            payload.filters.get("document_id")
         )
         
-        if document_id:
-            logger.info(f"Fetching graph for specific document: {document_id}")
+        if doc_id:
+            logger.info(f"Fetching graph for specific document: {doc_id}")
         else:
-            logger.info(f"Fetching entire graph (Limit: {limit})")
+            logger.info(f"Fetching entire graph (Limit: {payload.limit})")
 
-        # Execute the robust query in the repository
+        # Execute query via repository
         result = await graph_service.repo.fetch_combined_graph(
-            limit=limit,
-            types=filters.get("types"),
-            document_id=document_id
+            limit=payload.limit,
+            types=payload.filters.get("types"),
+            document_id=doc_id
         )
         return result
 
@@ -52,14 +115,13 @@ async def fetch_graph(payload: Dict[str, Any] = Body(...)):
 
 
 @router.post("/search")
-async def search_graph(payload: Dict[str, Any] = Body(...)):
+async def search_graph(payload: SearchPayload):
     """Highlights specific nodes using a keyword search."""
     try:
-        query = payload.get("query")
-        if not query:
+        if not payload.query:
             return {"results": [], "count": 0}
         
-        results = await graph_service.search_nodes(query)
+        results = await graph_service.search_nodes(payload.query)
         return {"results": results, "count": len(results)}
     except Exception as e:
         logger.error(f"Search Error: {e}")
@@ -81,30 +143,55 @@ async def graph_stats():
 # ==========================================
 
 @router.post("/entity")
-async def entity_crud(payload: Dict[str, Any] = Body(...)):
+async def entity_crud(payload: EntityPayload):
     """
     Unified controller for adding, updating, or deleting nodes.
-    Preserves 'normType' logic for UI compatibility.
+    Dynamically handles Partition Keys based on environment configuration.
     """
     try:
-        action = payload.get("action")
-        data = payload.get("data", payload)
+        action = payload.action
+        data = payload.data
         
+        # Retrieve the specific key name from .env (default to 'pk')
+        pk_name = getattr(settings, "COSMOS_GREMLIN_PARTITION_KEY", "pk")
+
         # --- CREATE ---
         if action == "create":
-            # Logic: Ensure 'type' is saved as 'normType' property
+            # 1. Robust ID Generation: Prevent 500 errors on missing IDs
+            if "id" not in data or not data["id"]:
+                data["id"] = str(uuid.uuid4())
+
+            # 2. Prepare Properties
             properties = data.get("properties", {}).copy()
             
-            # Check 'type' in root data or properties
+            # --- DYNAMIC PARTITION KEY ---
+            # If the partition key is missing in properties, force it to match ID.
+            if pk_name not in properties:
+                properties[pk_name] = data["id"]
+
+            # 3. Auto-Tagging for Visibility
+            if payload.documentId and "documentId" not in properties:
+                properties["documentId"] = payload.documentId
+
+            # 4. Type Normalization (UI 'type' -> DB 'normType')
             node_type = data.get("type") or properties.get("type")
             if node_type:
                 properties["normType"] = node_type
             
-            # Apply changes back to data
+            # Apply cleaned properties back to data object
             data["properties"] = properties
             
+            # Ensure Partition Key is also at the root level if the service layer checks there
+            data[pk_name] = properties[pk_name] 
+            
             await graph_service.add_entities([data])
-            return {"status": "success", "message": "Entity created successfully"}
+            
+            return {
+                "status": "success", 
+                "message": "Entity created successfully",
+                "id": data["id"],
+                "partitionKey": pk_name 
+            }
         
         # --- UPDATE ---
         elif action == "update":
@@ -112,13 +199,18 @@ async def entity_crud(payload: Dict[str, Any] = Body(...)):
             if not entity_id:
                 raise HTTPException(status_code=400, detail="Entity ID is required for update")
             
+            # FIXED: Get Partition Key for Update
+            # Try getting it from data root, or properties, or default to ID
+            partition_key = data.get(pk_name) or data.get("partitionKey") or entity_id
+
             # Persist type change if user edited it
             properties = data.get("properties", {}).copy()
             node_type = data.get("type") or properties.get("type")
             if node_type:
                 properties["normType"] = node_type
             
-            await graph_service.update_entity(entity_id, properties)
+            # Pass partition_key to service
+            await graph_service.update_entity(entity_id, properties, partition_key)
             return {"status": "success", "message": "Entity updated successfully"}
         
         # --- DELETE ---
@@ -127,12 +219,18 @@ async def entity_crud(payload: Dict[str, Any] = Body(...)):
             if not entity_id:
                 raise HTTPException(status_code=400, detail="Entity ID is required for delete")
             
-            await graph_service.delete_entity(entity_id)
+            # FIXED: Get Partition Key for Delete
+            partition_key = data.get(pk_name) or data.get("partitionKey") or entity_id
+            
+            # Pass partition_key to service
+            await graph_service.delete_entity(entity_id, partition_key)
             return {"status": "success", "message": f"Entity {entity_id} deleted"}
         
         else:
             raise HTTPException(status_code=400, detail=f"Unknown entity action: {action}")
 
+    except HTTPException as http_ex:
+        raise http_ex
     except Exception as e:
         logger.error(f"Entity CRUD Error: {e}")
         # Return 500 so frontend knows the save failed
@@ -144,27 +242,34 @@ async def entity_crud(payload: Dict[str, Any] = Body(...)):
 # ==========================================
 
 @router.post("/relationship")
-async def relationship_crud(payload: Dict[str, Any] = Body(...)):
+async def relationship_crud(payload: RelationshipPayload):
     """Unified controller for creating/updating/deleting edges."""
     try:
-        action = payload.get("action")
-        data = payload.get("data", payload)
+        action = payload.action
+        data = payload.data
 
         # --- CREATE ---
         if action == "create":
-            # Handle aliases (source/from, target/to, label/type) - CRITICAL FOR FRONTEND COMPATIBILITY
+            # Handle aliases (source/from, target/to, label/type) for frontend compatibility
             source_id = data.get("source") or data.get("from")
             target_id = data.get("target") or data.get("to")
             rel_label = data.get("label") or data.get("type") or "related_to"
 
             if not source_id or not target_id:
                 raise HTTPException(status_code=400, detail="Source and Target IDs are required")
+            
+            # Normalize properties
+            properties = data.get("properties", {})
+            
+            # Auto-tag edge with document ID if available
+            if payload.documentId:
+                 properties["doc"] = payload.documentId
 
             await graph_service.add_relationship(
                 from_id=source_id,
                 to_id=target_id,
                 rel_type=rel_label,
-                properties=data.get("properties", {})
+                properties=properties
             )
             return {"status": "success", "message": "Relationship created"}
         
@@ -190,6 +295,8 @@ async def relationship_crud(payload: Dict[str, Any] = Body(...)):
         else:
             raise HTTPException(status_code=400, detail=f"Unknown relationship action: {action}")
 
+    except HTTPException as http_ex:
+        raise http_ex
     except Exception as e:
         logger.error(f"Relationship CRUD Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -200,11 +307,11 @@ async def relationship_crud(payload: Dict[str, Any] = Body(...)):
 # ==========================================
 
 @router.post("/analyze")
-async def analyze_graph(payload: Dict[str, Any] = Body(...)):
+async def analyze_graph(payload: AnalysisPayload):
     """Runs graph algorithms like Shortest Path or Community Detection."""
     try:
-        analysis_type = payload.get("type")
-        params = payload.get("params", {})
+        analysis_type = payload.type
+        params = payload.params
 
         if analysis_type == "shortest_path":
             result = await graph_analytics.find_shortest_path(
@@ -226,10 +333,10 @@ async def analyze_graph(payload: Dict[str, Any] = Body(...)):
 
 
 @router.post("/document")
-async def delete_document_data(payload: Dict[str, Any] = Body(...)):
+async def delete_document_data(payload: DocumentPayload):
     """Deletes all nodes and edges associated with a specific file."""
     try:
-        filename = payload.get("filename")
+        filename = payload.filename
         if not filename:
             raise HTTPException(status_code=400, detail="Filename is required")
         

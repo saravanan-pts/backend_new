@@ -5,7 +5,7 @@ import json
 import pandas as pd
 from typing import Dict, Any, List
 
-# If you have the SchemaRegistry, keep this import. If not, you can remove it.
+# If you have the SchemaRegistry, keep this import.
 # from app.services.schema_registry import SchemaRegistry 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,7 @@ class DocumentProcessor:
             text_content = file_content.decode("latin-1")
 
         # 2. ROUTING LOGIC
+        # We import inside the method to avoid circular imports if graph_service imports this file
         from app.services.graph_service import graph_service
 
         if filename.lower().endswith(".csv"):
