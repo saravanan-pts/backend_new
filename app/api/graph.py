@@ -9,13 +9,13 @@ from app.config import settings
 
 # Import Services
 from app.services.graph_service import graph_service
-from app.services.graph_analytics import graph_analytics
+# Note: graph_analytics import removed as it was only used by the deleted analyze endpoint
 
 router = APIRouter(prefix="/api/graph", tags=["Graph"])
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# 0. DATA MODELS (Fixes Swagger UI & Validation)
+# 0. DATA MODELS
 # ==========================================
 
 class FetchPayload(BaseModel):
@@ -69,10 +69,6 @@ class RelationshipPayload(BaseModel):
                 }
             }
         }
-
-class AnalysisPayload(BaseModel):
-    type: str
-    params: Dict[str, Any] = {}
 
 class DocumentPayload(BaseModel):
     filename: str
@@ -303,34 +299,8 @@ async def relationship_crud(payload: RelationshipPayload):
 
 
 # ==========================================
-# 4. ANALYTICS & DOCUMENTS
+# 4. DOCUMENTS
 # ==========================================
-
-@router.post("/analyze")
-async def analyze_graph(payload: AnalysisPayload):
-    """Runs graph algorithms like Shortest Path or Community Detection."""
-    try:
-        analysis_type = payload.type
-        params = payload.params
-
-        if analysis_type == "shortest_path":
-            result = await graph_analytics.find_shortest_path(
-                source_id=params.get("source"), 
-                target_id=params.get("target")
-            )
-            return {"result": result}
-        
-        elif analysis_type == "community_detection":
-            result = await graph_analytics.detect_communities()
-            return {"result": result}
-
-        raise HTTPException(status_code=400, detail=f"Unsupported analysis type: {analysis_type}")
-
-    except Exception as e:
-        logger.error(f"Analysis Error: {e}")
-        # Return error inside JSON so UI can display it
-        return {"result": None, "error": str(e)}
-
 
 @router.post("/document")
 async def delete_document_data(payload: DocumentPayload):

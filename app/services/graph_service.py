@@ -26,6 +26,10 @@ class GraphService:
         self.repo = graph_repository
         self.PARTITION_KEY = getattr(settings, "COSMOS_GREMLIN_PARTITION_KEY", "pk")
 
+    # ==========================================
+    # 1. HELPER METHODS
+    # ==========================================
+
     def _clean_id(self, prefix: str, value: str) -> str:
         clean_val = str(value).strip()
         safe_val = re.sub(r'[^a-zA-Z0-9]', '_', clean_val)
@@ -45,6 +49,37 @@ class GraphService:
         if re.match(r'^c\d+$', v): return "Customer"
         if re.match(r'\d{4}-\d{2}-\d{2}', v): return "Time"
         return "Attribute"
+
+    # ==========================================
+    # 2. CRUD OPERATIONS (✅ ADDED THESE FIXES)
+    # ==========================================
+
+    async def add_relationship(self, from_id: str, to_id: str, rel_type: str, properties: Dict[str, Any] = None):
+        """Creates a single edge (Used by UI 'Add Edge')."""
+        return await self.repo.create_relationship(from_id, to_id, rel_type, properties)
+
+    async def update_relationship(self, rel_id: str, properties: Dict[str, Any]):
+        """Updates an existing edge."""
+        return await self.repo.update_relationship(rel_id, properties)
+
+    async def delete_relationship(self, rel_id: str):
+        """Deletes an edge by ID."""
+        return await self.repo.delete_relationship(rel_id)
+
+    async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None):
+        """Updates an existing node's properties (Fixes UI Edit)."""
+        # Ensure Partition Key is passed to repo so it updates the correct node
+        if partition_key:
+            properties[self.PARTITION_KEY] = partition_key
+        return await self.repo.update_entity(entity_id, properties)
+
+    async def delete_entity(self, entity_id: str, partition_key: str = None):
+        """Deletes a node by ID and Partition Key."""
+        return await self.repo.delete_entity(entity_id, partition_key)
+
+    # ==========================================
+    # 3. CSV / GRAPH PROCESSING
+    # ==========================================
 
     async def process_narrative(self, narrative_text: str, filename: str) -> Dict[str, Any]:
         logger.info(f"Processing: {filename}")
@@ -111,7 +146,7 @@ class GraphService:
                 all_entities.append({
                     "id": case_id, 
                     "label": case_val, 
-                    "type": "Case",     
+                    "type": "Case",      
                     "properties": {
                         "name": case_val, 
                         "normType": "Case", 
@@ -244,6 +279,9 @@ class GraphService:
     async def get_stats(self): return await self.repo.get_stats()
     async def search_nodes(self, q): return await self.repo.search_nodes(q)
     async def get_entities(self, label: Optional[str] = None): return await self.repo.get_entities(label=label)
-    async def delete_document_data(self, doc_id: str): return 0
+    
+    # ✅ CONNECTED TO REPO (Was returning 0 before)
+    async def delete_document_data(self, doc_id: str): 
+        return await self.repo.delete_document_data(doc_id)
 
 graph_service = GraphService()

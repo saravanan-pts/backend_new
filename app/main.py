@@ -17,8 +17,8 @@ from app.services.graph_service import graph_service
 from app.repositories.graph_repository import graph_repository
 
 # Import Routers
-# Ensure these files exist in your app/api/ folder
-from app.api import health, process, clear, entities, relationships, graph, documents, search
+# ✅ ADDED 'analysis' to the list of imports
+from app.api import health, process, clear, entities, relationships, graph, documents, search, analysis
 
 # Configure Logging
 logging.basicConfig(
@@ -73,6 +73,9 @@ def create_app() -> FastAPI:
 
     # --- CRITICAL FIX: Register Search Router ---
     app.include_router(search.router) 
+
+    # ✅ ADDED: Register Analysis Router (AI Analysis)
+    app.include_router(analysis.router)
 
     # --- Root Health Check ---
     @app.get("/health")
