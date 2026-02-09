@@ -1,12 +1,10 @@
 import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 from openai import AsyncAzureOpenAI
 from app.services.graph_service import graph_service
-# Note: If your Gremlin driver doesn't support TextP, we handle the fallback in the query logic below.
-# from gremlin_python.process.traversal import TextP 
 
 # Define Router
 router = APIRouter(prefix="/api/graph", tags=["Analysis"])
@@ -21,6 +19,10 @@ AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
 AZURE_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
 AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+
+# --- RISK DEFINITIONS (The Operational Truth) ---
+CAUSE_LABELS = ['LED_TO', 'CAUSES', 'CAUSED', 'TRIGGERED', 'SOURCE_OF', 'PRECEDED_BY']
+EFFECT_LABELS = ['RESULTED_IN', 'EFFECT', 'IMPACTED', 'AFFECTED', 'CONSEQUENCE_OF', 'HAS_EFFECT']
 
 ai_client = None
 USE_REAL_AI = False
@@ -49,7 +51,15 @@ async def analyze_node(body: AnalyzeRequest) -> Dict[str, Any]:
         if not client:
             raise HTTPException(status_code=503, detail="Database not connected")
 
-        # 1. FETCH THE TARGET NODE
+        # ---------------------------------------------------------
+        # STEP 1: ENRICH GRAPH (Active Learning)
+        # We update the DB immediately so the edges permanently define Cause/Effect
+        # ---------------------------------------------------------
+        await enrich_relationships(client, node_id)
+
+        # ---------------------------------------------------------
+        # STEP 2: FETCH NODE DETAILS
+        # ---------------------------------------------------------
         target_query = f"g.V('{node_id}').project('props', 'label').by(valueMap()).by(label)"
         target_result = await execute_gremlin(client, target_query)
         
@@ -62,44 +72,53 @@ async def analyze_node(body: AnalyzeRequest) -> Dict[str, Any]:
         node_props = format_properties(target_node.get('props', {}))
         node_name = node_props.get('name') or node_id
 
-        # 2. RISK SCANNING (The Backend Logic)
-        # We query the database to find specific risk indicators connected to this node.
+        # ---------------------------------------------------------
+        # STEP 3: RISK SCANNING
+        # ---------------------------------------------------------
         risk_context = {}
         
-        # A. Closures/Rejections (High Priority Risk)
-        # Scan outgoing/incoming nodes for labels containing "Closed" or "Rejected"
-        closure_query = f"g.V('{node_id}').both().has('label', TextP.containing('Closed')).count()"
-        
-        # Fallback query if TextP isn't available in your driver version:
-        # closure_query = f"g.V('{node_id}').out().hasLabel('Account Closed').count()"
-        
+        # A. Closures (High Priority)
         try:
+            closure_query = f"g.V('{node_id}').both().hasLabel('Account Closed').count()" 
             risk_context['closure_count'] = await execute_gremlin_scalar(client, closure_query)
         except:
-            # If the complex query fails, assume 0 for safety
             risk_context['closure_count'] = 0
         
-        # B. Complaints/Disputes (High Priority Risk)
-        complaint_query = f"g.V('{node_id}').both().has('label', TextP.containing('Complaint')).count()"
+        # B. Complaints (High Priority)
         try:
+            complaint_query = f"g.V('{node_id}').both().hasLabel('Complaint').count()"
             risk_context['complaint_count'] = await execute_gremlin_scalar(client, complaint_query)
         except:
             risk_context['complaint_count'] = 0
 
-        # 3. GATHER CONTEXT (Causes & Effects)
+        # ---------------------------------------------------------
+        # STEP 4: GATHER CONTEXT (Using new DB categories if available)
+        # ---------------------------------------------------------
+        # We project the 'riskCategory' property we just wrote to the DB
+        
         # Upstream (Causes)
-        cause_query = f"g.V('{node_id}').inE().project('rel', 'source').by(label).by(outV().label()).limit(10)"
+        cause_query = f"g.V('{node_id}').inE().project('rel', 'cat', 'source').by(label).by(coalesce(values('riskCategory'), constant(''))).by(outV().label()).limit(10)"
         causes_result = await execute_gremlin(client, cause_query)
-        causes_text = [f"- {c['source']} ({c['rel']})" for c in causes_result]
-
-        # Downstream (Effects/Next Steps)
-        effect_query = f"g.V('{node_id}').outE().project('rel', 'target').by(label).by(inV().label()).limit(10)"
+        
+        # Downstream (Effects)
+        effect_query = f"g.V('{node_id}').outE().project('rel', 'cat', 'target').by(label).by(coalesce(values('riskCategory'), constant(''))).by(inV().label()).limit(10)"
         effects_result = await execute_gremlin(client, effect_query)
-        effects_text = [f"- ({e['rel']}) -> {e['target']}" for e in effects_result]
 
-        # 4. PREPARE AI PROMPT
-        # We explicitly tell the AI to act as a Car Insurance Analyst and use the Risk Data we found.
-        system_prompt = "You are a Senior Risk Analyst for a Car Insurance company. Your goal is to analyze graph entities to identify operational risks, root causes, and necessary actions."
+        # Format context for AI
+        causes_text = []
+        for c in causes_result:
+            cat_str = f"[{c['cat']}] " if c['cat'] else ""
+            causes_text.append(f"- {cat_str}{c['source']} ({c['rel']})")
+
+        effects_text = []
+        for e in effects_result:
+            cat_str = f"[{e['cat']}] " if e['cat'] else ""
+            effects_text.append(f"- ({e['rel']}) -> {cat_str}{e['target']}")
+
+        # ---------------------------------------------------------
+        # STEP 5: PREPARE AI PROMPT
+        # ---------------------------------------------------------
+        system_prompt = "You are a Senior Risk Analyst for a Car Insurance company. Analyze the provided graph entity to identify operational risks and root causes."
         
         user_prompt = f"""
         ENTITY REPORT:
@@ -111,22 +130,23 @@ async def analyze_node(body: AnalyzeRequest) -> Dict[str, Any]:
         - Related Closures/Rejections: {risk_context['closure_count']}
         - Related Complaints/Disputes: {risk_context['complaint_count']}
 
-        CONTEXT:
-        - Incoming Events (Causes): {chr(10).join(causes_text) if causes_text else "(None - Start Node)"}
-        - Outgoing Events (Effects): {chr(10).join(effects_text) if effects_text else "(None - End Node)"}
+        CONTEXT (Operational Flow):
+        - Incoming (Potential Causes): {chr(10).join(causes_text) if causes_text else "(None - Start Node)"}
+        - Outgoing (Consequences): {chr(10).join(effects_text) if effects_text else "(None - End Node)"}
 
         INSTRUCTIONS:
-        Write a normalized analysis in exactly these 3 sections:
-        1. **Identity**: Briefly explain what this entity is (e.g., "A Branch managing 50 accounts" or "A Policy Case").
+        Write a concise operational analysis in 3 sections:
+        1. **Identity**: What is this entity?
         2. **Risk Assessment**: 
-           - If Closures > 0 or Complaints > 0: Mark as **HIGH PRIORITY**. Explain the specific risk (churn/dissatisfaction).
-           - Otherwise: Mark as **Stable**.
-        3. **Next Steps**: Recommend a specific action based on the risk (e.g., "Audit Branch", "Contact Customer", "Monitor").
+           - Mark **HIGH PRIORITY** if closures/complaints > 0.
+           - Mark **Stable** otherwise.
+        3. **Next Steps**: Actionable recommendation (Monitor, Audit, Contact).
         """
 
-        # 5. GENERATE SUMMARY
+        # ---------------------------------------------------------
+        # STEP 6: GENERATE SUMMARY
+        # ---------------------------------------------------------
         summary = ""
-        
         if USE_REAL_AI and ai_client:
             try:
                 logger.info("Sending prompt to Azure OpenAI...")
@@ -154,6 +174,38 @@ async def analyze_node(body: AnalyzeRequest) -> Dict[str, Any]:
 
 # --- HELPERS ---
 
+async def enrich_relationships(client, node_id: str):
+    """
+    Updates the database edges connected to this node with explicit 'riskCategory' properties.
+    This ensures the 'Cause' and 'Effect' logic is persisted in the DB, not just the frontend.
+    """
+    try:
+        # 1. Tag Incoming CAUSES (e.g. LED_TO, CAUSED) -> riskCategory: Cause
+        for label in CAUSE_LABELS:
+            # FIX: Removed .iterate() - It caused the GraphCompileException
+            query = f"g.V('{node_id}').inE('{label}').property('riskCategory', 'Cause')"
+            
+            # FIX: We must wait for the result (.result()) so the DB is updated 
+            # BEFORE the next step reads it.
+            try:
+                client.submit_async(query).result() 
+            except Exception:
+                pass # Ignore if edge doesn't exist
+
+        # 2. Tag Outgoing EFFECTS (e.g. RESULTED_IN) -> riskCategory: Effect
+        for label in EFFECT_LABELS:
+            # FIX: Removed .iterate()
+            query = f"g.V('{node_id}').outE('{label}').property('riskCategory', 'Effect')"
+            
+            try:
+                client.submit_async(query).result()
+            except Exception:
+                pass 
+            
+        logger.info(f"Enriched relationships for node {node_id}")
+    except Exception as e:
+        logger.warning(f"Failed to enrich relationships: {e}")
+
 async def execute_gremlin(client, query):
     try:
         future = client.submit_async(query)
@@ -164,7 +216,6 @@ async def execute_gremlin(client, query):
         return []
 
 async def execute_gremlin_scalar(client, query):
-    """Executes a query designed to return a single number (like .count())."""
     try:
         res = await execute_gremlin(client, query)
         if res and isinstance(res, list): return res[0]
@@ -173,7 +224,6 @@ async def execute_gremlin_scalar(client, query):
         return 0
 
 def format_properties(props):
-    # Cleans up Gremlin's {'key': ['val']} format to {'key': 'val'}
     clean = {}
     for k, v in props.items():
         if isinstance(v, list) and len(v) > 0: clean[k] = v[0]
@@ -181,14 +231,11 @@ def format_properties(props):
     return clean
 
 def generate_logic_summary(label, risks, causes, effects):
-    # Fallback Logic (Normalized Format) used if AI is down
     closures = risks.get('closure_count', 0)
     complaints = risks.get('complaint_count', 0)
     
-    # 1. Identity
     summary = f"**Identity:** This entity is a **{label}** identified in the graph. "
     
-    # 2. Risk Assessment
     if closures > 0 or complaints > 0:
         summary += f"\n\n**Risk Assessment:** ⚠️ **HIGH PRIORITY**. System detected {closures} closures and {complaints} complaints linked here. This suggests operational risk."
         action = "Audit immediately."
@@ -196,9 +243,8 @@ def generate_logic_summary(label, risks, causes, effects):
         summary += "\n\n**Risk Assessment:** ✅ **Stable**. No immediate risk indicators (closures/complaints) found in database scan."
         action = "Continue monitoring."
 
-    # 3. Next Steps
     if effects:
-        summary += f"\n\n**Next Steps:** {action} Review the {len(effects)} downstream outcomes."
+        summary += f"\n\n**Next Steps:** {action} Review the downstream outcomes."
     else:
         summary += f"\n\n**Next Steps:** {action} Process ends here."
         

@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 # Core Gremlin Imports
 from gremlin_python.driver.client import Client
 from gremlin_python.driver.serializer import GraphSONSerializersV2d0
-# ✅ Added TextP import to fix Search crash
 from gremlin_python.process.traversal import TextP
 from app.config import settings 
 
@@ -76,15 +75,14 @@ class GraphRepository:
 
     def _clean_gremlin_data(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        CRITICAL UI HELPER (FIXED FOR EDIT FORM):
-        1. Flattens lists (['Beta'] -> 'Beta').
-        2. Sets 'label' to Display Name (for Edit Form).
-        3. Sets 'type' to Category (for Color/Shape).
+        CRITICAL UI HELPER:
+        1. Flattens lists.
+        2. Sets 'label' to Display Name.
+        3. Sets 'type' to Category.
         """
         cleaned_list = []
         for item in data_list:
             flat_item = {}
-            # Flatten lists from Cosmos DB
             for key, val in item.items():
                 if isinstance(val, list) and len(val) == 1:
                     flat_item[key] = val[0]
@@ -92,18 +90,13 @@ class GraphRepository:
                     flat_item[key] = val
             
             node_id = str(flat_item.get("id", ""))
-            
-            # The Gremlin 'label' is actually the Category (e.g. "Organization")
             gremlin_category = str(flat_item.get("label", "Node"))
-            
-            # Determine the visual Display Name (Label)
-            # Prefer 'name' property -> fallback to ID
             display_name = flat_item.get("name") or node_id
 
             final_item = {
                 "id": node_id,
-                "label": display_name,    # ✅ FIX: Shows "irmai" in UI
-                "type": gremlin_category, # ✅ FIX: Shows "Organization" in UI
+                "label": display_name,    
+                "type": gremlin_category, 
                 "properties": {} 
             }
 
@@ -111,11 +104,9 @@ class GraphRepository:
                 if key in ["id", "label"]: continue
                 final_item["properties"][key] = val
             
-            # Metadata for side panel
             final_item["properties"]["originalLabel"] = display_name 
             final_item["properties"]["type"] = gremlin_category 
             final_item["properties"]["label"] = display_name 
-            # Ensure Partition Key is visible so UI can send it back on delete
             if self.pk_key in flat_item:
                 final_item["properties"][self.pk_key] = flat_item[self.pk_key]
 
@@ -148,9 +139,9 @@ class GraphRepository:
                         logger.error(f"Max retries exceeded: {query}")
                         raise exc
                     wait_time = (0.5 * (2 ** retries)) + (random.randint(0, 100) / 1000.0)
+                    logger.warning(f"Throttled (429). Retrying in {wait_time:.2f}s...")
                     await asyncio.sleep(wait_time)
                 
-                # Handle Not Found
                 elif "404" in error_msg:
                     return []
                 
@@ -163,7 +154,6 @@ class GraphRepository:
     # ==========================================
 
     async def fetch_combined_graph(self, limit: int = 500, types: List[str] = None, document_id: str = None) -> Dict[str, Any]:
-        """Main fetch for the visualizer."""
         try:
             node_query = "g.V()"
             edge_query = "g.E()"
@@ -186,7 +176,6 @@ class GraphRepository:
             raw_nodes = await self._execute_query(node_query)
             raw_edges = await self._execute_query(edge_query)
 
-            # Apply UI Cleaner
             clean_nodes = self._clean_gremlin_data(raw_nodes or [])
 
             return {
@@ -199,11 +188,11 @@ class GraphRepository:
             return {"nodes": [], "edges": [], "error": str(exc)}
 
     # ==========================================
-    # 4. CRUD OPERATIONS (✅ FIXED WITH PK)
+    # 4. CRUD OPERATIONS (✅ FIXED FOR PROPERTIES)
     # ==========================================
 
     async def create_entity(self, entity_id: str, label: str, properties: Dict[str, Any]) -> None:
-        """Creates or Updates (Upsert) a node."""
+        """Creates or Updates (Upsert) a node and ensures properties are saved."""
         prop_str = ""
         skip_keys = ["id", "pk", "partitionKey", self.pk_key]
 
@@ -212,53 +201,22 @@ class GraphRepository:
             safe_val = self._escape(value)
             prop_str += f".property('{key}', '{safe_val}')"
         
-        # Ensure PK is set
         pk_val = properties.get(self.pk_key) or properties.get("partitionKey") or entity_id
 
-        # Upsert Logic: Fold -> Coalesce(Unfold, AddV)
+        # ✅ FIX: Appends .property() to the RESULT of coalesce.
+        # This guarantees properties are updated even if the node already exists.
         query = (
             f"g.V('{entity_id}').fold().coalesce("
             f"unfold(), "
             f"addV('{label}')"
             f".property('id', '{entity_id}')"
             f".property('{self.pk_key}', '{pk_val}')"
-            f")" 
-            f"{prop_str}" 
+            f"){prop_str}" 
         )
         await self._execute_query(query)
 
-    async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None) -> None:
-        """
-        Updates a node. 
-        ✅ STRICT PK ENFORCEMENT: Uses partition_key to find the exact node.
-        """
-        # Fallback: If no PK passed, assume PK == ID
-        pk_val = partition_key if partition_key else entity_id
-        
-        # Target specific node in specific partition
-        query = f"g.V('{entity_id}').has('{self.pk_key}', '{pk_val}')"
-        
-        for k, v in properties.items():
-            if k in ["id", self.pk_key]: continue
-            safe_v = self._escape(v)
-            query += f".property('{k}', '{safe_v}')"
-            
-        await self._execute_query(query)
-
-    async def delete_entity(self, entity_id: str, partition_key: str = None) -> None:
-        """
-        Deletes a node.
-        ✅ STRICT PK ENFORCEMENT: Uses partition_key to ensure delete works in Cosmos.
-        """
-        # Fallback: If no PK passed, assume PK == ID
-        pk_val = partition_key if partition_key else entity_id
-
-        # Target specific partition
-        query = f"g.V('{entity_id}').has('{self.pk_key}', '{pk_val}').drop()"
-        await self._execute_query(query)
-
     async def create_relationship(self, from_id: str, to_id: str, label: str, properties: Dict[str, Any] = None) -> None:
-        """Creates an edge if it doesn't exist."""
+        """Creates or Updates an edge and ensures properties are saved."""
         prop_str = ""
         if properties:
             for key, value in properties.items():
@@ -266,15 +224,31 @@ class GraphRepository:
                 safe_val = self._escape(value)
                 prop_str += f".property('{key}', '{safe_val}')"
 
+        # ✅ FIX: Appends .property() OUTSIDE the addE() parenthesis.
+        # This guarantees properties are updated even if the edge already exists.
         query = (
             f"g.V('{from_id}').coalesce("
             f"outE('{label}').where(inV().hasId('{to_id}')),"
-            f"addE('{label}').to(g.V('{to_id}')){prop_str})"
+            f"addE('{label}').to(g.V('{to_id}'))"
+            f"){prop_str}" 
         )
         await self._execute_query(query)
 
+    async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None) -> None:
+        pk_val = partition_key if partition_key else entity_id
+        query = f"g.V('{entity_id}').has('{self.pk_key}', '{pk_val}')"
+        for k, v in properties.items():
+            if k in ["id", self.pk_key]: continue
+            safe_v = self._escape(v)
+            query += f".property('{k}', '{safe_v}')"
+        await self._execute_query(query)
+
+    async def delete_entity(self, entity_id: str, partition_key: str = None) -> None:
+        pk_val = partition_key if partition_key else entity_id
+        query = f"g.V('{entity_id}').has('{self.pk_key}', '{pk_val}').drop()"
+        await self._execute_query(query)
+
     async def update_relationship(self, rel_id: str, properties: Dict[str, Any]) -> None:
-        """Updates an existing edge."""
         query = f"g.E('{rel_id}')"
         for k, v in properties.items():
             safe_val = self._escape(v)
@@ -282,11 +256,9 @@ class GraphRepository:
         await self._execute_query(query)
 
     async def delete_relationship(self, rel_id: str) -> None:
-        """Deletes an edge."""
         await self._execute_query(f"g.E('{rel_id}').drop()")
 
     async def delete_data_by_filename(self, filename: str) -> None:
-        """Batched delete for documents."""
         BATCH_SIZE = 500
         try:
             safe_id = self._escape(filename)
@@ -307,7 +279,7 @@ class GraphRepository:
             pass
 
     # ==========================================
-    # 5. DATA RETRIEVAL (RESTORED METHODS)
+    # 5. DATA RETRIEVAL
     # ==========================================
 
     async def get_stats(self) -> Dict[str, Any]:
@@ -316,7 +288,6 @@ class GraphRepository:
         return {"nodes": nodes_res[0] if nodes_res else 0, "edges": edges_res[0] if edges_res else 0}
 
     async def search_nodes(self, keyword: str, limit: int = 20) -> List[Dict[str, Any]]:
-        # ✅ Using TextP correctly now that it's imported
         query = f"g.V().has('label', TextP.containing('{keyword}')).limit({limit}).valueMap(true)"
         raw = await self._execute_query(query)
         return self._clean_gremlin_data(raw)
@@ -341,7 +312,20 @@ class GraphRepository:
             "edges": await self.get_relationships()
         }
 
+    # ==========================================
+    # ✅ FIXED METHOD: REPLACED elementMap()
+    # ==========================================
     async def get_relationships_for_entity(self, entity_id: str) -> List[Dict[str, Any]]:
-        return await self._execute_query(f"g.V('{entity_id}').bothE().elementMap()")
+        """
+        Fetches all edges connected to a specific entity.
+        Fixed to use .project() instead of .elementMap() for Cosmos DB compatibility.
+        """
+        query = (
+            f"g.V('{entity_id}').bothE()"
+            f".project('id', 'label', 'source', 'target', 'properties', 'riskCategory')"
+            f".by(id).by(label).by(outV().id()).by(inV().id()).by(valueMap())"
+            f".by(coalesce(values('riskCategory'), constant('')))"
+        )
+        return await self._execute_query(query)
 
 graph_repository = GraphRepository()

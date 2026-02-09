@@ -8,18 +8,21 @@ from io import StringIO
 
 from app.config import settings
 from app.repositories.graph_repository import graph_repository
-from app.services.document_processor import document_processor
+# Note: document_processor import removed from top to avoid circular dependency
 from app.services.openai_extractor import extract_entities_and_relationships
 
 logger = logging.getLogger(__name__)
 
+# --- OPERATIONAL CATEGORIES (DB SOURCE OF TRUTH) ---
+CAUSE_LABELS = ['CAUSE', 'LED_TO', 'CAUSES', 'CAUSED', 'TRIGGERED', 'SOURCE_OF', 'PRECEDED_BY']
+EFFECT_LABELS = ['EFFECT', 'RESULTED_IN', 'IMPACTED', 'AFFECTED', 'CONSEQUENCE_OF', 'HAS_EFFECT']
+SEQUENCE_LABELS = ['NEXT_STEP', 'FOLLOWED_BY', 'PRECEDES', 'THEN']
+
 class GraphService:
     """
-    FINAL GRAPH ENGINE (Strict Isolation + Sequence Logic)
-    - Fixes 'Spiderweb': Case IDs cannot be attributes.
-    - Features: 
-        1. Grouping: Click 'Branch B1' -> See all Cases.
-        2. Sequence: Adds 'NEXT_STEP' edges between Activities (Process Mining).
+    FINAL GRAPH ENGINE (Active Ingestion & Process Mining)
+    - Auto-tags 'riskCategory' (Cause, Effect, or Process) during data load.
+    - Implements Star-Chain Sequence Logic with 3 Distinct Edge Types.
     """
 
     def __init__(self):
@@ -50,31 +53,47 @@ class GraphService:
         if re.match(r'\d{4}-\d{2}-\d{2}', v): return "Time"
         return "Attribute"
 
+    def _determine_risk_category(self, label: str) -> str:
+        """
+        Operational Intelligence:
+        Maps edge labels to 'Cause', 'Effect', or 'Process' and SAVES TO DB.
+        """
+        clean = str(label).upper().strip()
+        if clean in CAUSE_LABELS:
+            return 'Cause'
+        if clean in EFFECT_LABELS:
+            return 'Effect'
+        if clean in SEQUENCE_LABELS:
+            return 'Process'
+        return ''
+
     # ==========================================
-    # 2. CRUD OPERATIONS (✅ ADDED THESE FIXES)
+    # 2. CRUD OPERATIONS
     # ==========================================
 
     async def add_relationship(self, from_id: str, to_id: str, rel_type: str, properties: Dict[str, Any] = None):
-        """Creates a single edge (Used by UI 'Add Edge')."""
+        """Creates a single edge with auto-risk tagging."""
+        if properties is None: properties = {}
+        
+        # Auto-enrich with Risk Category before saving to DB
+        risk_cat = self._determine_risk_category(rel_type)
+        if risk_cat:
+            properties['riskCategory'] = risk_cat
+            
         return await self.repo.create_relationship(from_id, to_id, rel_type, properties)
 
     async def update_relationship(self, rel_id: str, properties: Dict[str, Any]):
-        """Updates an existing edge."""
         return await self.repo.update_relationship(rel_id, properties)
 
     async def delete_relationship(self, rel_id: str):
-        """Deletes an edge by ID."""
         return await self.repo.delete_relationship(rel_id)
 
     async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None):
-        """Updates an existing node's properties (Fixes UI Edit)."""
-        # Ensure Partition Key is passed to repo so it updates the correct node
         if partition_key:
             properties[self.PARTITION_KEY] = partition_key
         return await self.repo.update_entity(entity_id, properties)
 
     async def delete_entity(self, entity_id: str, partition_key: str = None):
-        """Deletes a node by ID and Partition Key."""
         return await self.repo.delete_entity(entity_id, partition_key)
 
     # ==========================================
@@ -100,27 +119,27 @@ class GraphService:
         
         case_col = next((c for c in df.columns if "case" in c or "id" in c), df.columns[0])
         time_col = next((c for c in df.columns if "time" in c or "date" in c), None)
-        act_col  = next((c for c in df.columns if "activity" in c or "action" in c), None)
-
-        # 1. SORTING IS CRITICAL FOR 'NEXT_STEP' LOGIC
+        
+        # 1. SORTING (Critical for Process Sequence)
         if time_col:
             df[time_col] = pd.to_datetime(df[time_col])
             df = df.sort_values(by=[case_col, time_col])
 
-        # 2. Ban-List to prevent Spiderweb
+        # 2. Ban-List
         all_case_ids_banlist = set(df[case_col].astype(str).str.strip().unique())
 
-        all_entities = []
+        # --- CHANGE 1: Use a Dictionary for Nodes to allow property updates ---
+        all_entities_map = {} 
         all_relationships = []
-        created_nodes = set()
         created_edges = set()
 
-        # 3. Sequence Tracker: Stores { case_id: "Activity_Node_ID" }
+        # 3. Sequence Tracker
         case_activity_tracker = {}
+        case_activity_labels = {} # Track labels for human-readable properties
 
         # A. DOCUMENT NODE
         doc_id = filename
-        all_entities.append({
+        all_entities_map[doc_id] = {
             "id": doc_id, 
             "label": filename, 
             "type": "Document",
@@ -131,7 +150,7 @@ class GraphService:
                 "status": "processed",
                 self.PARTITION_KEY: domain
             }
-        })
+        }
 
         total_rows = len(df)
         
@@ -142,11 +161,11 @@ class GraphService:
             case_val = str(row[case_col]).strip()
             case_id = self._clean_id("Case", case_val)
             
-            if case_id not in created_nodes:
-                all_entities.append({
+            if case_id not in all_entities_map:
+                all_entities_map[case_id] = {
                     "id": case_id, 
                     "label": case_val, 
-                    "type": "Case",      
+                    "type": "Case",        
                     "properties": {
                         "name": case_val, 
                         "normType": "Case", 
@@ -154,36 +173,36 @@ class GraphService:
                         "documentId": filename, 
                         self.PARTITION_KEY: domain 
                     }
-                })
+                }
                 # Link Doc -> Case
                 edge_key = f"{doc_id}_{case_id}_CONTAINS"
                 if edge_key not in created_edges:
                     all_relationships.append({"from": doc_id, "to": case_id, "label": "CONTAINS", "properties": {"doc": filename}})
                     created_edges.add(edge_key)
-                created_nodes.add(case_id)
 
-            # C. TRACK CURRENT ACTIVITY FOR SEQUENCE
+            # C. TRACK CURRENT ACTIVITY
             current_activity_id = None
+            current_activity_label = ""
 
             # D. PROCESS COLUMNS
             for col in df.columns:
                 val = str(row[col]).strip()
                 if not val or val.lower() == "nan": continue
-                if col == case_col: continue # Skip Case Col
-                if val in all_case_ids_banlist: continue # BAN-LIST CHECK
+                if col == case_col: continue 
+                if val in all_case_ids_banlist: continue 
 
                 node_type = self._detect_type(col, val)
                 if node_type == "Amount": continue
 
                 node_id = self._clean_id(node_type, val)
 
-                # Capture Activity ID for Sequence Logic
                 if node_type == "Activity":
                     current_activity_id = node_id
+                    current_activity_label = val
 
                 # Create Context Node
-                if node_id not in created_nodes:
-                    all_entities.append({
+                if node_id not in all_entities_map:
+                    all_entities_map[node_id] = {
                         "id": node_id, 
                         "label": val, 
                         "type": node_type,  
@@ -193,13 +212,12 @@ class GraphService:
                             "documentId": filename, 
                             self.PARTITION_KEY: domain
                         }
-                    })
+                    }
                     # Link Doc -> Context
                     edge_key = f"{doc_id}_{node_id}_HAS"
                     if edge_key not in created_edges:
                         all_relationships.append({"from": doc_id, "to": node_id, "label": f"HAS_{node_type.upper()}", "properties": {"doc": filename}})
                         created_edges.add(edge_key)
-                    created_nodes.add(node_id)
 
                 # Link Case -> Context
                 rel_label = "LINKED_TO"
@@ -212,8 +230,8 @@ class GraphService:
                 edge_unique_key = f"{case_id}_{node_id}_{rel_label}"
                 
                 if node_type == "Activity":
-                    # Activities need history (allow duplicates)
                     time_val = str(row.get(time_col, ''))[:10]
+                    # Activities allow duplicate edges for timestamps
                     all_relationships.append({
                         "from": case_id, 
                         "to": node_id, 
@@ -230,58 +248,90 @@ class GraphService:
                         })
                         created_edges.add(edge_unique_key)
 
-            # E. APPLY SEQUENCE LOGIC (NEXT_STEP)
-            # If we found an activity in this row, and we know the previous activity for this case:
+            # E. 3 SEPARATE CONCEPTS (NEXT_STEP, CAUSE, EFFECT)
             if current_activity_id:
                 if case_id in case_activity_tracker:
                     previous_activity_id = case_activity_tracker[case_id]
+                    previous_activity_label = case_activity_labels[case_id]
                     
-                    # Create Edge: Previous Activity -> Current Activity
-                    # This builds the "Process Map" (Cause & Effect)
                     if previous_activity_id != current_activity_id:
-                        # We use a global key because we want to see the general flow of the process
-                        seq_key = f"{previous_activity_id}_{current_activity_id}_NEXT_STEP"
                         
-                        # We add it if not exists (General Flow) OR we can add per case.
-                        # Adding per case creates too many edges. Adding once shows the "Standard Process".
+                        # 1. NEXT_STEP (Process Flow - Amber)
+                        seq_key = f"{previous_activity_id}_{current_activity_id}_NEXT_STEP"
                         if seq_key not in created_edges:
                             all_relationships.append({
-                                "from": previous_activity_id,
-                                "to": current_activity_id,
-                                "label": "NEXT_STEP",
-                                "properties": {"doc": filename}
+                                "from": previous_activity_id, "to": current_activity_id,
+                                "label": "NEXT_STEP", "properties": {"doc": filename, "riskCategory": "Process"}
                             })
                             created_edges.add(seq_key)
 
-                # Update tracker for the next row
-                case_activity_tracker[case_id] = current_activity_id
+                        # 2. CAUSE (Root Trigger - Red) - Separate Edge
+                        cause_key = f"{previous_activity_id}_{current_activity_id}_CAUSE"
+                        if cause_key not in created_edges:
+                            all_relationships.append({
+                                "from": previous_activity_id, "to": current_activity_id,
+                                "label": "CAUSE", "properties": {"doc": filename, "riskCategory": "Cause"}
+                            })
+                            created_edges.add(cause_key)
 
-        await self.add_entities(all_entities)
+                        # 3. EFFECT (Consequence - Green) - Separate Edge
+                        effect_key = f"{previous_activity_id}_{current_activity_id}_EFFECT"
+                        if effect_key not in created_edges:
+                            all_relationships.append({
+                                "from": previous_activity_id, "to": current_activity_id,
+                                "label": "EFFECT", "properties": {"doc": filename, "riskCategory": "Effect"}
+                            })
+                            created_edges.add(effect_key)
+
+                        # --- FIX: COMMENTED OUT PROPERTY SETTING ---
+                        # This ensures Cause/Effect appear as LINES (Edges) only, not as text properties.
+                        
+                        # if "cause" not in all_entities_map[current_activity_id]["properties"]:
+                        #    all_entities_map[current_activity_id]["properties"]["cause"] = previous_activity_label
+                        
+                        # if "effect" not in all_entities_map[previous_activity_id]["properties"]:
+                        #    all_entities_map[previous_activity_id]["properties"]["effect"] = current_activity_label
+
+                case_activity_tracker[case_id] = current_activity_id
+                case_activity_labels[case_id] = current_activity_label
+
+        # Convert map back to list for processing
+        all_entities_list = list(all_entities_map.values())
+
+        await self.add_entities(all_entities_list)
         await self.add_relationships(all_relationships)
-        return {"filename": filename, "entities": len(all_entities)}
+        return {"filename": filename, "entities": len(all_entities_list)}
 
     async def _process_unstructured_text(self, text, filename, domain):
+        # Placeholder for AI logic
         return {"status": "skipped", "msg": "AI Mode not active"}
 
     async def add_entities(self, entities):
         seen = set()
         for e in entities:
-            if e["id"] not in seen:
-                seen.add(e["id"])
-                await self.repo.create_entity(e["id"], e["label"], e.get("properties", {}))
+            # Upsert entity with properties
+            await self.repo.create_entity(e["id"], e["label"], e.get("properties", {}))
 
     async def add_relationships(self, relationships):
-        for r in relationships:
-            await self.repo.create_relationship(r["from"], r["to"], r["label"], r.get("properties", {}))
+        for i, r in enumerate(relationships):
+            # --- CRITICAL: THIS SAVES THE CATEGORY TO DB ---
+            props = r.get("properties", {})
+            risk = self._determine_risk_category(r["label"])
+            if risk:
+                props['riskCategory'] = risk # <--- Saved to Cosmos DB
+            
+            await self.repo.create_relationship(r["from"], r["to"], r["label"], props)
+            
+            # Throttle to prevent 429 errors during massive uploads
+            if i % 10 == 0:
+                await asyncio.sleep(0.05)
 
     async def get_graph(self): return await self.repo.get_graph()
     async def clear_graph(self, scope="all"): return await self.repo.clear_graph(scope)
     async def get_stats(self): return await self.repo.get_stats()
     async def search_nodes(self, q): return await self.repo.search_nodes(q)
     async def get_entities(self, label: Optional[str] = None): return await self.repo.get_entities(label=label)
-    
-    # ✅ CONNECTED TO REPO (Was returning 0 before)
-    async def delete_document_data(self, doc_id: str): 
-        return await self.repo.delete_document_data(doc_id)
+    async def get_relationships_for_entity(self, entity_id: str): return await self.repo.get_relationships_for_entity(entity_id)
+    async def delete_document_data(self, doc_id: str): return await self.repo.delete_document_data(doc_id)
 
 graph_service = GraphService()

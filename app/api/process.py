@@ -56,6 +56,7 @@ async def process_document(
             content = await file.read()
             
             # 2. Call the processor (Updated to await because processor is now async)
+            # Ensure document_processor.process_file returns a dict with 'entities' and 'relationships' counts
             result = await document_processor.process_file(content, file.filename)
 
         # ---- Text processing ----
@@ -67,6 +68,7 @@ async def process_document(
         return {
             "success": True,
             "data": result,
+            "message": "Document processed successfully. Relationships established."
         }
 
     except HTTPException:
