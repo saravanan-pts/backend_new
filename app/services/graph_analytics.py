@@ -13,6 +13,29 @@ class GraphAnalytics:
     def __init__(self):
         self.repo = GraphRepository()
 
+    # --- SAFE GREMLIN EXECUTION HELPER ---
+    async def _execute_gremlin(self, query: str) -> Any:
+        """Safely executes Gremlin queries without Threading/Future crashes."""
+        try:
+            client = getattr(self.repo, 'client', None)
+            if not client: return None
+            
+            submit = getattr(client, 'submitAsync', getattr(client, 'submit_async', getattr(client, 'submit', None)))
+            if not submit: return None
+            
+            future = submit(query)
+            result_set = future.result() if hasattr(future, 'result') else future
+            
+            if hasattr(result_set, 'all'):
+                results = result_set.all().result()
+            else:
+                results = result_set
+                
+            return results
+        except Exception as e:
+            logger.error(f"[Analytics] Gremlin Query Failed: {e}")
+            return None
+
     async def detect_communities(self) -> Dict[str, Any]:
         """
         1. Simple Clustering: Finds connected groups of entities.
@@ -22,8 +45,10 @@ class GraphAnalytics:
         logger.info("[Analytics] Starting Community Detection...")
         
         # 1. Fetch all relationships to see the structure
-        # FIX: Ensure get_relationships is an async method
         relationships = await self.repo.get_relationships()
+        if not relationships:
+            logger.warning("[Analytics] No relationships found to cluster.")
+            return {"communities_detected": 0, "new_community_nodes": []}
         
         # 2. Simple Clustering (Heuristic: Connected components)
         clusters = self._simple_clustering(relationships)
@@ -33,7 +58,7 @@ class GraphAnalytics:
 
         # 3. Generate Summaries for each Cluster
         for cluster_id, entity_ids in clusters.items():
-            # Skip small clusters (less than 3 nodes) to save tokens
+            # Skip small clusters (less than 3 nodes) to save AI tokens and noise
             if len(entity_ids) < 3:
                 continue
 
@@ -48,39 +73,41 @@ class GraphAnalytics:
         }
 
     async def _generate_community_summary(self, cluster_id: str, entity_ids: List[str]) -> str:
-        """Fetch group data, ask AI for a theme, and save as a Community node."""
+        """Fetch group data, ask AI for a crisp business theme, and save as a Community node."""
         try:
-            # 1. Fetch labels/content for entities using Gremlin
+            # 1. Fetch labels/content for entities using Gremlin safely
             id_list = [f"'{eid}'" for eid in entity_ids]
-            query = f"g.V({','.join(id_list)}).valueMap(true)"
+            query = f"g.V({','.join(id_list)}).project('id', 'label', 'props').by(id).by(label).by(valueMap())"
             
-            # FIX: Changed .submit().all().result() to await submit_async()
-            result_set = await self.repo.client.submit_async(query)
-            entity_data = await result_set.all()
+            entity_data = await self._execute_gremlin(query)
             
             if not entity_data:
                 return None
 
-            # 2. Format context for AI
+            # 2. Format context for AI (Compress to save tokens)
             context_items = []
             for e in entity_data:
                 label = e.get('label', 'Unknown')
-                if isinstance(label, list): label = label[0]
-                context_items.append(f"{label}: {json.dumps(e)}")
+                props = e.get('props', {})
+                name = props.get('name', [e.get('id')])[0] if isinstance(props.get('name'), list) else props.get('name', e.get('id'))
+                context_items.append(f"[{label}] {name}")
             
             context_text = "\n".join(context_items)
 
-            # 3. Ask AI to summarize this "Community"
+            # 3. UPGRADED AI PROMPT: Strictly "Up to the point" Executive Analysis
             prompt = f"""
-            You are analyzing a 'Community' detected in a Knowledge Graph.
+            You are a Senior Process Mining Analyst reviewing a cluster of connected entities in an enterprise Knowledge Graph.
             
-            Entities in this community:
-            {context_text[:6000]}
+            ENTITIES IN CLUSTER:
+            {context_text[:5000]}
 
-            Task:
-            1. Identify the common theme connecting these entities.
-            2. Write a detailed summary of what this group represents.
-            3. Assign a specialized label (e.g., "Compliance_Cluster_A").
+            TASK:
+            Provide a hyper-concise, executive-level summary of what this cluster represents. Get straight to the point. No fluff.
+
+            REQUIREMENTS:
+            1. 'label': A strict, 2-to-3 word category (e.g., "Fraud Ring", "Auto Claim Lifecycle", "Blue-Collar Sales").
+            2. 'theme': A 1-sentence description of the core business function or anomaly.
+            3. 'summary': Maximum 2 sentences. State exactly what operational process this is, and if there is an obvious bottleneck or risk.
 
             Return ONLY valid JSON: {{ "theme": "...", "summary": "...", "label": "..." }}
             """
@@ -88,7 +115,7 @@ class GraphAnalytics:
             response = await openai_client.chat.completions.create(
                 model=AZURE_OPENAI_DEPLOYMENT,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
+                temperature=0.1, # Extremely low temp for factual, concise output
                 response_format={"type": "json_object"}
             )
             
@@ -97,7 +124,8 @@ class GraphAnalytics:
             # 4. Save the "Community" as a Node in the Graph
             community_id = f"community_{cluster_id}"
             community_props = {
-                "label": result.get("label", "Unknown Community"),
+                "name": result.get("label", "Operational Cluster"),
+                "normType": "Community",
                 "theme": result.get("theme", ""),
                 "summary": result.get("summary", ""),
                 "member_count": len(entity_ids),
@@ -105,7 +133,6 @@ class GraphAnalytics:
                 "pk": "Community"
             }
             
-            # FIX: Await the repository write methods
             await self.repo.create_entity(community_id, "Community", community_props)
 
             # 5. Link members to the Community
@@ -125,8 +152,10 @@ class GraphAnalytics:
         cluster_count = 0
 
         for rel in relationships:
-            u = rel.get("outV")
-            v = rel.get("inV")
+            # FIX: Robustly grab Source/Target IDs regardless of how the DB formatted the dictionary
+            u = rel.get("outV") or rel.get("source") or rel.get("from")
+            v = rel.get("inV") or rel.get("target") or rel.get("to")
+            
             if not u or not v:
                 continue
 
@@ -146,6 +175,7 @@ class GraphAnalytics:
                 node_to_cluster[u] = v_clust
                 clusters[v_clust].add(u)
             elif u_clust != v_clust:
+                # Merge clusters
                 for node in clusters[v_clust]:
                     node_to_cluster[node] = u_clust
                     clusters[u_clust].add(node)
@@ -157,10 +187,9 @@ class GraphAnalytics:
         """Finds the quickest road between two entities."""
         query = f"g.V('{source_id}').repeat(out().simplePath()).until(hasId('{target_id}')).path().limit(1)"
         try:
-            # FIX: Changed to await submit_async()
-            result_set = await self.repo.client.submit_async(query)
-            result = await result_set.all()
-            return result
+            # FIX: Used the safe execution wrapper
+            result = await self._execute_gremlin(query)
+            return result if result else []
         except Exception as e:
             logger.error(f"Shortest path failed: {e}")
             return []

@@ -9,7 +9,7 @@ from io import StringIO
 from app.config import settings
 from app.repositories.graph_repository import graph_repository
 # Note: document_processor import removed from top to avoid circular dependency
-from app.services.openai_extractor import extract_entities_and_relationships
+# from app.services.openai_extractor import extract_entities_and_relationships
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,10 @@ class GraphService:
     """
     FINAL GRAPH ENGINE (Active Ingestion & Process Mining)
     - Auto-tags 'riskCategory' (Cause, Effect, or Process) during data load.
-    - Implements Star-Chain Sequence Logic with 3 Distinct Edge Types.
+    - Implements Semantic Override Logic (Option B) for workflow exception paths.
+    - FIX: Robust Partition Key & Context management for Manual CRUD operations.
+    - ADDED: Backend Fetch for Lazy Loading Neighbors.
+    - FIX: Parallel sequence bands via unique edge ID injection.
     """
 
     def __init__(self):
@@ -32,6 +35,67 @@ class GraphService:
     # ==========================================
     # 1. HELPER METHODS
     # ==========================================
+
+    def _run_query(self, query: str) -> Any:
+        """Helper to safely execute Gremlin queries (Returns SINGLE result)."""
+        try:
+            client = getattr(self.repo, 'client', None)
+            if not client: return None
+            
+            # Handle different gremlinpython client versions securely
+            submit = getattr(client, 'submitAsync', getattr(client, 'submit_async', getattr(client, 'submit', None)))
+            if not submit: return None
+            
+            future = submit(query)
+            
+            # Resolve the Threading Future (this fixes the 'await' crash)
+            result_set = future.result() if hasattr(future, 'result') else future
+            
+            # Extract the actual data from the ResultSet
+            if hasattr(result_set, 'all'):
+                results = result_set.all().result()
+            else:
+                results = result_set
+                
+            if results and isinstance(results, list):
+                return results[0]
+            return results
+        except Exception as e:
+            logger.warning(f"Auto-Discovery Query Failed: {e}")
+            return None
+
+    def _run_query_list(self, query: str) -> List[Any]:
+        """
+        [NEW] Helper to safely execute Gremlin queries (Returns LIST of results).
+        Required for get_neighbors and bulk fetches.
+        """
+        try:
+            client = getattr(self.repo, 'client', None)
+            if not client: return []
+            
+            submit = getattr(client, 'submitAsync', getattr(client, 'submit_async', getattr(client, 'submit', None)))
+            if not submit: return []
+            
+            future = submit(query)
+            result_set = future.result() if hasattr(future, 'result') else future
+            
+            if hasattr(result_set, 'all'):
+                results = result_set.all().result()
+            else:
+                results = result_set
+                
+            return results if isinstance(results, list) else []
+        except Exception as e:
+            logger.warning(f"List Query Failed: {e}")
+            return []
+
+    def _is_uuid(self, val: Any) -> bool:
+        """Properly checks if a string is a random UUID without using length limits."""
+        try:
+            uuid.UUID(str(val))
+            return True
+        except ValueError:
+            return False
 
     def _clean_id(self, prefix: str, value: str) -> str:
         clean_val = str(value).strip()
@@ -67,41 +131,276 @@ class GraphService:
             return 'Process'
         return ''
 
+    def _derive_domain(self, filename: str) -> str:
+        """
+        Helper: Extracts the Partition Key (Domain) from the filename.
+        Logic: 'car-insurance_log.csv' -> 'car-insurance'
+        Used to ensure manual nodes get the correct PK.
+        """
+        if not filename: return "general"
+        base = filename.rsplit('.', 1)[0] # Remove extension
+        return base.split('_')[0] if "_" in base else base
+
     # ==========================================
-    # 2. CRUD OPERATIONS
+    # 2. READ OPERATIONS (NEW & EXISTING)
+    # ==========================================
+
+    async def get_neighbors(self, node_id: str) -> Dict[str, Any]:
+        """
+        [NEW] Fetches the specific node, its connecting edges, and direct neighbors.
+        Used for 'Lazy Loading' (Backend Fetch) in the UI when expanding a node.
+        """
+        print(f"--- [FETCH NEIGHBORS] Node ID: {node_id} ---", flush=True)
+        try:
+            # 1. Fetch Nodes (Central Node + Neighbors)
+            # Uses 'elementMap()' to get full properties of the nodes
+            nodes_query = f"g.V('{node_id}').union(identity(), both()).dedup().elementMap()"
+            nodes_data = self._run_query_list(nodes_query)
+
+            # 2. Fetch Edges (Connecting the central node)
+            edges_query = f"g.V('{node_id}').bothE().elementMap()"
+            edges_data = self._run_query_list(edges_query)
+
+            return {
+                "nodes": nodes_data,
+                "edges": edges_data
+            }
+        except Exception as e:
+            logger.error(f"Error fetching neighbors for {node_id}: {str(e)}")
+            return {"nodes": [], "edges": []}
+
+    async def get_graph(self): return await self.repo.get_graph()
+    async def clear_graph(self, scope="all"): return await self.repo.clear_graph(scope)
+    async def get_stats(self): return await self.repo.get_stats()
+    async def search_nodes(self, q): return await self.repo.search_nodes(q)
+    async def get_entities(self, label: Optional[str] = None): return await self.repo.get_entities(label=label)
+    async def get_relationships_for_entity(self, entity_id: str): return await self.repo.get_relationships_for_entity(entity_id)
+    async def delete_document_data(self, doc_id: str): return await self.repo.delete_document_data(doc_id)
+
+    # ==========================================
+    # 3. CRUD OPERATIONS (FIXED FOR PK & UI)
     # ==========================================
 
     async def add_relationship(self, from_id: str, to_id: str, rel_type: str, properties: Dict[str, Any] = None):
-        """Creates a single edge with auto-risk tagging."""
+        """Creates a single edge with auto-risk tagging and Context Inheritance."""
         if properties is None: properties = {}
         
-        # Auto-enrich with Risk Category before saving to DB
         risk_cat = self._determine_risk_category(rel_type)
         if risk_cat:
             properties['riskCategory'] = risk_cat
+
+        # FIX: Ensure manual edges appear in the UI's Document View!
+        if "doc" not in properties and "documentId" not in properties:
+            query = f"g.V('{from_id}').project('doc', 'pk').by(coalesce(values('documentId'), constant(''))).by(coalesce(values('{self.PARTITION_KEY}'), constant('')))"
+            node_data = self._run_query(query)
             
+            if node_data and isinstance(node_data, dict):
+                if node_data.get('doc'):
+                    properties['documentId'] = str(node_data['doc'])
+                    properties['doc'] = str(node_data['doc']) 
+                if node_data.get('pk'):
+                    properties[self.PARTITION_KEY] = str(node_data['pk'])
+                    properties['domain'] = str(node_data['pk'])
+            
+        print(f"--- [EXECUTING ADD EDGE] Source: {from_id} | Target: {to_id} | Final Props: {properties} ---", flush=True)
         return await self.repo.create_relationship(from_id, to_id, rel_type, properties)
 
     async def update_relationship(self, rel_id: str, properties: Dict[str, Any]):
         return await self.repo.update_relationship(rel_id, properties)
 
+    async def upgrade_relationship(self, rel_id: str, new_type: str, new_props: Dict[str, Any] = None):
+        """
+        Safely changes an Edge's Type (Label) dynamically.
+        """
+        if new_props is None: new_props = {}
+        query = f"g.E('{rel_id}').project('sid', 'tid', 'props').by(outV().id()).by(inV().id()).by(valueMap())"
+        edge_data = self._run_query(query)
+
+        if not edge_data or not isinstance(edge_data, dict): 
+            return {"error": "Relationship not found"}
+
+        from_id, to_id = edge_data.get('sid'), edge_data.get('tid')
+        risk_cat = self._determine_risk_category(new_type)
+        if risk_cat: new_props['riskCategory'] = risk_cat
+        
+        new_rel = await self.repo.create_relationship(from_id, to_id, new_type, new_props)
+        await self.repo.delete_relationship(rel_id)
+        return {"status": "success", "msg": f"Upgraded edge to {new_type}"}
+
     async def delete_relationship(self, rel_id: str):
         return await self.repo.delete_relationship(rel_id)
 
     async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None):
-        if partition_key:
-            properties[self.PARTITION_KEY] = partition_key
+        """
+        Updates node properties cleanly without corrupting Types or losing PKs.
+        """
+        print(f"--- [UPDATE REQUEST RECEIVED] Node ID: {entity_id} | Provided PK/Doc: {partition_key} ---", flush=True)
+        
+        true_pk = partition_key
+        doc_id = properties.get("documentId")
+        
+        # 1. Strip bad UUID Partition Keys sent by the frontend
+        if self.PARTITION_KEY in properties:
+            val = str(properties[self.PARTITION_KEY])
+            if self._is_uuid(val) or val == entity_id:
+                del properties[self.PARTITION_KEY]
+
+        # 2. STRIP THE API ROUTER FALLBACK
+        if true_pk == entity_id:
+            true_pk = None
+
+        # 3. Extract domain if the frontend sent the full filename (.csv)
+        if true_pk and str(true_pk).endswith(".csv"):
+            true_pk = self._derive_domain(str(true_pk))
+
+        # Clear it if it's a random UUID
+        if true_pk and self._is_uuid(true_pk):
+            true_pk = None
+
+        # 4. AUTO-DISCOVER the true PK if we don't have it using the sync helper
+        if not true_pk:
+            val = self._run_query(f"g.V('{entity_id}').values('{self.PARTITION_KEY}')")
+            if val:
+                true_pk = str(val)
+                print(f"--- [AUTO-DISCOVERY] Found PK '{true_pk}' for updating node '{entity_id}' ---", flush=True)
+
+        # Re-inject verified context
+        if true_pk: properties[self.PARTITION_KEY] = true_pk
+        if doc_id: properties["documentId"] = doc_id
+
+        # 5. FIX: Stop overwriting Concept 'Type' with the display 'Name'
+        if "type" in properties:
+            clean_type = str(properties["type"]).strip().title()
+            properties["normType"] = clean_type
+            properties["type"] = clean_type
+            properties["entityType"] = clean_type
+
+        print(f"--- [EXECUTING UPDATE] Node ID: {entity_id} | Final PK: {true_pk} ---", flush=True)
         return await self.repo.update_entity(entity_id, properties)
 
     async def delete_entity(self, entity_id: str, partition_key: str = None):
-        return await self.repo.delete_entity(entity_id, partition_key)
+        """
+        Deletes a node securely using precise Partition Key targeting.
+        """
+        print(f"--- [DELETE REQUEST RECEIVED] Node ID: {entity_id} | Provided PK/Doc: {partition_key} ---", flush=True)
+        
+        true_pk = partition_key
+
+        # 1. STRIP THE API ROUTER FALLBACK
+        if true_pk == entity_id:
+            true_pk = None
+
+        # 2. Strip UUIDs sent by mistake
+        if true_pk and self._is_uuid(true_pk):
+            true_pk = None
+
+        # 3. Extract domain if a filename (.csv) was passed
+        if true_pk and str(true_pk).endswith(".csv"):
+            true_pk = self._derive_domain(str(true_pk))
+
+        # 4. Auto-Discover the specific node's PK using the sync helper
+        if not true_pk:
+            val = self._run_query(f"g.V('{entity_id}').values('{self.PARTITION_KEY}')")
+            if val:
+                true_pk = str(val)
+                print(f"--- [AUTO-DISCOVERY] Found PK '{true_pk}' for deleting node '{entity_id}' ---", flush=True)
+
+        print(f"--- [EXECUTING DELETE] Node ID: {entity_id} | Final PK: {true_pk} ---", flush=True)
+        return await self.repo.delete_entity(entity_id, true_pk)
+
+    async def add_entities(self, entities):
+        """
+        Creates nodes. Handles both Bulk Load (CSV) and Manual Creation (UI).
+        """
+        for e in entities:
+            raw_label = e.get("label", "Concept")
+            props = e.get("properties", {})
+
+            # --- 1. CONTEXT INHERITANCE ---
+            doc_id = props.get("documentId") or e.get("documentId")
+            
+            target_pk = "general" # Default fallback
+            
+            if doc_id and str(doc_id).endswith(".csv"):
+                target_pk = self._derive_domain(doc_id)
+                props["documentId"] = doc_id
+                props["domain"] = target_pk
+            elif "domain" in props:
+                target_pk = props["domain"]
+            elif self.PARTITION_KEY in props:
+                val = str(props[self.PARTITION_KEY])
+                if not self._is_uuid(val): target_pk = val
+
+            # FORCE the Partition Key
+            props[self.PARTITION_KEY] = target_pk
+
+            # --- 2. CLEAN ID & TYPE ---
+            if "normType" in props:
+                node_type = props["normType"]
+            else:
+                node_type = str(raw_label).strip().title()
+                props["normType"] = node_type
+                props["type"] = node_type
+                props["entityType"] = node_type
+
+            # Name Display
+            node_name = props.get("name", raw_label)
+            props["name"] = node_name
+            
+            # Generate Deterministic ID (e.g. 'Person_Janani')
+            clean_id = self._clean_id(node_type, node_name)
+            
+            # --- 3. SAVE ---
+            await self.repo.create_entity(clean_id, raw_label, props)
+
+    async def add_relationships(self, relationships):
+        for i, r in enumerate(relationships):
+            # --- CRITICAL: THIS SAVES THE CATEGORY TO DB ---
+            props = r.get("properties", {})
+            risk = self._determine_risk_category(r["label"])
+            if risk:
+                props['riskCategory'] = risk # <--- Saved to Cosmos DB
+            
+            # --- FIX: INJECT UNIQUE EDGE ID FOR PARALLEL BANDS ---
+            edge_id = r.get("id")
+            if edge_id:
+                props["edge_id"] = edge_id
+            
+            await self.repo.create_relationship(r["from"], r["to"], r["label"], props)
+            
+            # Throttle to prevent 429 errors during massive uploads
+            if i % 10 == 0:
+                await asyncio.sleep(0.05)
 
     # ==========================================
-    # 3. CSV / GRAPH PROCESSING
+    # 3.5 AI RISK INGESTION AGENT
+    # ==========================================
+    async def _ai_ingestion_analysis(self, activity_label: str) -> Dict[str, str]:
+        text = str(activity_label).lower()
+        insights = {"riskLevel": "Low", "isCause": "False", "isEffect": "False", "aiSummary": "Standard operational step."}
+
+        if any(word in text for word in ['fail', 'error', 'timeout', 'reject', 'denied', 'fraud', 'divergent', 'anomaly', 'breach']):
+            insights["riskLevel"] = "High"
+            insights["isCause"] = "True"
+            insights["riskCategory"] = "Cause"
+            insights["aiSummary"] = f"AI Risk Flag: '{activity_label}' indicates a critical failure or anomaly."
+        
+        elif any(word in text for word in ['closed', 'block', 'suspend', 'locked', 'rejeitado', 'terminated', 'cleared']):
+            insights["riskLevel"] = "Medium"
+            insights["isEffect"] = "True"
+            insights["riskCategory"] = "Effect"
+            insights["aiSummary"] = f"AI Risk Flag: '{activity_label}' is a punitive/terminal state."
+
+        return insights
+
+    # ==========================================
+    # 4. CSV / GRAPH PROCESSING (YOUR ORIGINAL LOGIC)
     # ==========================================
 
     async def process_narrative(self, narrative_text: str, filename: str) -> Dict[str, Any]:
         logger.info(f"Processing: {filename}")
+        
+        # Use helper to get domain (matches the logic in _derive_domain)
         domain = filename.split('_')[0] if "_" in filename else "general"
 
         if filename.lower().endswith(".csv") or "," in narrative_text:
@@ -165,7 +464,7 @@ class GraphService:
                 all_entities_map[case_id] = {
                     "id": case_id, 
                     "label": case_val, 
-                    "type": "Case",        
+                    "type": "Case",         
                     "properties": {
                         "name": case_val, 
                         "normType": "Case", 
@@ -192,7 +491,9 @@ class GraphService:
                 if val in all_case_ids_banlist: continue 
 
                 node_type = self._detect_type(col, val)
-                if node_type == "Amount": continue
+                
+                # --- FIX: Removed the line that skipped 'Amount' ---
+                # if node_type == "Amount": continue 
 
                 node_id = self._clean_id(node_type, val)
 
@@ -226,6 +527,8 @@ class GraphService:
                 elif node_type == "Product": rel_label = "HAS_PRODUCT"
                 elif node_type == "Customer": rel_label = "OWNED_BY"
                 elif node_type == "Time": rel_label = "OCCURRED_ON"
+                # --- FIX: Added logic to link Amount/Balance ---
+                elif node_type == "Amount": rel_label = "HAS_BALANCE"
 
                 edge_unique_key = f"{case_id}_{node_id}_{rel_label}"
                 
@@ -248,7 +551,7 @@ class GraphService:
                         })
                         created_edges.add(edge_unique_key)
 
-            # E. 3 SEPARATE CONCEPTS (NEXT_STEP, CAUSE, EFFECT)
+            # E. SEQUENCE LOGIC: OPTION B (SEMANTIC OVERRIDE)
             if current_activity_id:
                 if case_id in case_activity_tracker:
                     previous_activity_id = case_activity_tracker[case_id]
@@ -256,41 +559,38 @@ class GraphService:
                     
                     if previous_activity_id != current_activity_id:
                         
-                        # 1. NEXT_STEP (Process Flow - Amber)
-                        seq_key = f"{previous_activity_id}_{current_activity_id}_NEXT_STEP"
+                        # AI Intelligence check for the current activity transition
+                        ai_insights = await self._ai_ingestion_analysis(current_activity_label)
+                        
+                        # Determine the Semantic Label (Override defaults if anomaly detected)
+                        seq_label = "NEXT_STEP"
+                        risk_cat = "Process"
+                        
+                        if ai_insights["isCause"] == "True":
+                            seq_label = "CAUSES"
+                            risk_cat = "Cause"
+                        elif ai_insights["isEffect"] == "True":
+                            seq_label = "RESULTED_IN"
+                            risk_cat = "Effect"
+
+                        # Draw a SINGLE sequence edge (No parallel lines for the exact same step) 
+                        # using dedupe=False logic (appending _idx) so we get thick visual bands!
+                        seq_key = f"{previous_activity_id}_{current_activity_id}_{seq_label}_{idx}"
                         if seq_key not in created_edges:
                             all_relationships.append({
+                                "id": seq_key, # <--- UNIQUE ID INJECTED FOR PARALLEL BANDS
                                 "from": previous_activity_id, "to": current_activity_id,
-                                "label": "NEXT_STEP", "properties": {"doc": filename, "riskCategory": "Process"}
+                                "label": seq_label, 
+                                "properties": {"doc": filename, "riskCategory": risk_cat, "case_ref": case_val}
                             })
                             created_edges.add(seq_key)
 
-                        # 2. CAUSE (Root Trigger - Red) - Separate Edge
-                        cause_key = f"{previous_activity_id}_{current_activity_id}_CAUSE"
-                        if cause_key not in created_edges:
-                            all_relationships.append({
-                                "from": previous_activity_id, "to": current_activity_id,
-                                "label": "CAUSE", "properties": {"doc": filename, "riskCategory": "Cause"}
-                            })
-                            created_edges.add(cause_key)
-
-                        # 3. EFFECT (Consequence - Green) - Separate Edge
-                        effect_key = f"{previous_activity_id}_{current_activity_id}_EFFECT"
-                        if effect_key not in created_edges:
-                            all_relationships.append({
-                                "from": previous_activity_id, "to": current_activity_id,
-                                "label": "EFFECT", "properties": {"doc": filename, "riskCategory": "Effect"}
-                            })
-                            created_edges.add(effect_key)
-
-                        # --- FIX: COMMENTED OUT PROPERTY SETTING ---
-                        # This ensures Cause/Effect appear as LINES (Edges) only, not as text properties.
+                        # 4. NODE PROPERTIES (Data for DB only, Filtered in UI)
+                        if "cause" not in all_entities_map[current_activity_id]["properties"]:
+                            all_entities_map[current_activity_id]["properties"]["cause"] = previous_activity_label
                         
-                        # if "cause" not in all_entities_map[current_activity_id]["properties"]:
-                        #    all_entities_map[current_activity_id]["properties"]["cause"] = previous_activity_label
-                        
-                        # if "effect" not in all_entities_map[previous_activity_id]["properties"]:
-                        #    all_entities_map[previous_activity_id]["properties"]["effect"] = current_activity_label
+                        if "effect" not in all_entities_map[previous_activity_id]["properties"]:
+                            all_entities_map[previous_activity_id]["properties"]["effect"] = current_activity_label
 
                 case_activity_tracker[case_id] = current_activity_id
                 case_activity_labels[case_id] = current_activity_label
@@ -305,33 +605,5 @@ class GraphService:
     async def _process_unstructured_text(self, text, filename, domain):
         # Placeholder for AI logic
         return {"status": "skipped", "msg": "AI Mode not active"}
-
-    async def add_entities(self, entities):
-        seen = set()
-        for e in entities:
-            # Upsert entity with properties
-            await self.repo.create_entity(e["id"], e["label"], e.get("properties", {}))
-
-    async def add_relationships(self, relationships):
-        for i, r in enumerate(relationships):
-            # --- CRITICAL: THIS SAVES THE CATEGORY TO DB ---
-            props = r.get("properties", {})
-            risk = self._determine_risk_category(r["label"])
-            if risk:
-                props['riskCategory'] = risk # <--- Saved to Cosmos DB
-            
-            await self.repo.create_relationship(r["from"], r["to"], r["label"], props)
-            
-            # Throttle to prevent 429 errors during massive uploads
-            if i % 10 == 0:
-                await asyncio.sleep(0.05)
-
-    async def get_graph(self): return await self.repo.get_graph()
-    async def clear_graph(self, scope="all"): return await self.repo.clear_graph(scope)
-    async def get_stats(self): return await self.repo.get_stats()
-    async def search_nodes(self, q): return await self.repo.search_nodes(q)
-    async def get_entities(self, label: Optional[str] = None): return await self.repo.get_entities(label=label)
-    async def get_relationships_for_entity(self, entity_id: str): return await self.repo.get_relationships_for_entity(entity_id)
-    async def delete_document_data(self, doc_id: str): return await self.repo.delete_document_data(doc_id)
 
 graph_service = GraphService()

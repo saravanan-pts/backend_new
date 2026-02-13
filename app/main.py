@@ -5,6 +5,7 @@ from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from typing import Dict, Any
+from pydantic import BaseModel  # <--- ADDED THIS
 
 # Apply nest_asyncio to prevent event loop errors in some environments
 nest_asyncio.apply()
@@ -12,12 +13,11 @@ nest_asyncio.apply()
 # Load environment variables
 load_dotenv()
 
-# Import Service (needed for the root /clear endpoint)
+# Import Service (needed for the root /clear endpoint and neighbors)
 from app.services.graph_service import graph_service
 from app.repositories.graph_repository import graph_repository
 
 # Import Routers
-# ✅ CORRECTED: Imports 'analysis' from 'app.api' based on your file structure
 from app.api import health, process, clear, entities, relationships, graph, documents, search, analysis
 
 # Configure Logging
@@ -74,9 +74,30 @@ def create_app() -> FastAPI:
     # Search Router
     app.include_router(search.router) 
 
-    # ✅ REGISTER ANALYSIS ROUTER
-    # This connects the /api/graph/analyze endpoint you created
+    # Analysis Router
     app.include_router(analysis.router)
+
+    # ==========================================
+    # NEW ENDPOINT: LAZY LOADING (NEIGHBORS)
+    # ==========================================
+    class NeighborRequest(BaseModel):
+        nodeId: str
+
+    @app.post("/api/graph/neighbors")
+    async def get_node_neighbors(request: NeighborRequest):
+        """
+        Called when a user clicks a node in the UI.
+        Fetches the node and its direct connections from Cosmos DB.
+        """
+        try:
+            # Calls the new method we added to GraphService
+            data = await graph_service.get_neighbors(request.nodeId)
+            return data
+        except Exception as e:
+            logger.error(f"Error in neighbor fetch: {str(e)}")
+            # Return empty structure so UI doesn't crash
+            return {"nodes": [], "edges": []}
+    # ==========================================
 
     # --- Root Health Check ---
     @app.get("/health")
@@ -94,13 +115,11 @@ def create_app() -> FastAPI:
         }
 
     # --- Root Clear Endpoint ---
-    # This captures the "POST /clear" request from your frontend settings panel
     @app.post("/clear")
     async def root_clear_graph(payload: Dict[str, Any] = Body(default={"scope": "all"})):
         try:
             scope = payload.get("scope", "all")
             logger.info(f"Root /clear called with scope: {scope}")
-            # Use the repository directly or via service
             count = await graph_repository.clear_graph(scope)
             return {"status": "success", "message": f"Graph cleared ({scope})", "deleted_count": count}
         except Exception as e:

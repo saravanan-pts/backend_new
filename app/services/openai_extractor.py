@@ -39,34 +39,40 @@ def _post_process_entity(ent: Dict[str, Any]) -> Dict[str, Any]:
 async def extract_entities_and_relationships(text: str) -> Dict[str, Any]:
     logger.info(f"OpenAI extractor: processing chunk of length {len(text)}")
     
+    # UPGRADED PROMPT: Now trained on your new Enterprise Process Mining Ontology
     system_prompt = """
     You are an expert Graph Database Architect. Extract entities and relationships from the text.
 
     ### 1. RELATIONSHIP ENFORCEMENT
-    The text explicitly contains uppercase relationship verbs (e.g., "is PROFILED_AS"). 
-    **You MUST use these exact relationship names.**
+    You must extract process mining and business relationships using this strict Enterprise Ontology.
     
-    - If text says: "Case 1 is PROFILED_AS Job 'Management'"
-      -> Create Relation: {from: "Case 1", to: "Management", type: "PROFILED_AS"}
+    **Demographics & Accounts:**
+    - PROFILED_AS (e.g. Case -> Job)
+    - CATEGORIZED_BY (e.g. Case -> Marital Status / Alarm Class)
+    - MANAGED_BY (e.g. Case -> Branch)
+    - BANKING_AT (e.g. Customer -> Branch)
+    - HOLDS_ACCOUNT (e.g. Customer -> Account Type)
     
-    - If text says: "Case 1 PERFORMS_ACTIVITY 'Call'"
-      -> Create Relation: {from: "Case 1", to: "Call", type: "PERFORMS_ACTIVITY"}
-
-    - If text says: "Activity 'Call' OCCURRED_ON Time '12:00'"
-      -> Create Relation: {from: "Call", to: "12:00", type: "OCCURRED_ON"}
+    **Financials:**
+    - VALUED_AT (e.g. Case -> Claim Amount)
+    - RECURRING_COST (e.g. Case -> Premium)
+    - INITIALIZED_WITH (e.g. Case -> Opening Balance)
+    
+    **Process Flow (Critical):**
+    - PERFORMS_ACTIVITY (e.g. Case -> Outbound Call Started)
+    - NEXT_STEP (e.g. Activity 1 -> Activity 2)
+    - CAUSES (Use if Activity 1 leads to an anomaly/failure in Activity 2)
+    - RESULTED_IN (Use if Activity 1 leads to a terminal state like 'Closed' or 'Rejected')
+    - TIME_STAMPED_ACTION (e.g. Activity -> Timestamp)
 
     ### 2. ENTITY TYPES
-    - **Case**: Numeric IDs.
-    - **Activity**: "Call Started", "Sale Closed", "Email".
-    - **Job**: "Management", "Technician".
-    - **Status**: "Single", "Married", "No_Result".
-    - **Product**: "Savings", "Loan".
-    - **Branch**: Location names.
+    Classify nodes strictly into these types:
+    - Case, Customer, Branch, Job, Marital, Outcome, Activity, Time, Product, Amount, Agent.
 
-    ### 3. OUTPUT JSON
+    ### 3. OUTPUT JSON FORMAT
     {
       "entities": [{"label": "Entity Name", "type": "Entity Type"}],
-      "relationships": [{"from": "Source", "to": "Target", "type": "RELATION_NAME"}]
+      "relationships": [{"from": "Source Label", "to": "Target Label", "type": "RELATION_NAME"}]
     }
     """
 
