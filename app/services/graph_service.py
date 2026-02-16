@@ -3,8 +3,10 @@ import uuid
 import re
 import asyncio
 import pandas as pd
+import json # Added for RCA JSON parsing
 from typing import List, Dict, Any, Optional
 from io import StringIO
+from openai import AsyncAzureOpenAI # Added for RCA Agent
 
 from app.config import settings
 from app.repositories.graph_repository import graph_repository
@@ -14,9 +16,10 @@ from app.repositories.graph_repository import graph_repository
 logger = logging.getLogger(__name__)
 
 # --- OPERATIONAL CATEGORIES (DB SOURCE OF TRUTH) ---
+# ADDED 'NEXT' and 'RESULTS_IN' to match the new shorter edge labels
 CAUSE_LABELS = ['CAUSE', 'LED_TO', 'CAUSES', 'CAUSED', 'TRIGGERED', 'SOURCE_OF', 'PRECEDED_BY']
-EFFECT_LABELS = ['EFFECT', 'RESULTED_IN', 'IMPACTED', 'AFFECTED', 'CONSEQUENCE_OF', 'HAS_EFFECT']
-SEQUENCE_LABELS = ['NEXT_STEP', 'FOLLOWED_BY', 'PRECEDES', 'THEN']
+EFFECT_LABELS = ['EFFECT', 'RESULTED_IN', 'RESULTS_IN', 'IMPACTED', 'AFFECTED', 'CONSEQUENCE_OF', 'HAS_EFFECT']
+SEQUENCE_LABELS = ['NEXT', 'NEXT_STEP', 'FOLLOWED_BY', 'PRECEDES', 'THEN']
 
 class GraphService:
     """
@@ -24,8 +27,9 @@ class GraphService:
     - Auto-tags 'riskCategory' (Cause, Effect, or Process) during data load.
     - Implements Semantic Override Logic (Option B) for workflow exception paths.
     - FIX: Robust Partition Key & Context management for Manual CRUD operations.
-    - ADDED: Backend Fetch for Lazy Loading Neighbors.
-    - FIX: Parallel sequence bands via unique edge ID injection.
+    - FIX: Async Gremlin queries to prevent WebSocket drops (Event loop unblocked).
+    - FIX: "Star Model" Hierarchical Edge Generation for instant 1-Hop case context.
+    - ADDED: Enterprise RCA Agent for automated Root Cause/Effect persistence.
     """
 
     def __init__(self):
@@ -36,7 +40,7 @@ class GraphService:
     # 1. HELPER METHODS
     # ==========================================
 
-    def _run_query(self, query: str) -> Any:
+    async def _run_query(self, query: str) -> Any:
         """Helper to safely execute Gremlin queries (Returns SINGLE result)."""
         try:
             client = getattr(self.repo, 'client', None)
@@ -48,12 +52,13 @@ class GraphService:
             
             future = submit(query)
             
-            # Resolve the Threading Future (this fixes the 'await' crash)
-            result_set = future.result() if hasattr(future, 'result') else future
+            # PROPER ASYNC AWAIT: Prevents blocking the event loop and dropping the WebSocket
+            result_set = await asyncio.wrap_future(future) if hasattr(future, 'add_done_callback') else future
             
             # Extract the actual data from the ResultSet
             if hasattr(result_set, 'all'):
-                results = result_set.all().result()
+                results_future = result_set.all()
+                results = await asyncio.wrap_future(results_future) if hasattr(results_future, 'add_done_callback') else results_future.result()
             else:
                 results = result_set
                 
@@ -64,7 +69,7 @@ class GraphService:
             logger.warning(f"Auto-Discovery Query Failed: {e}")
             return None
 
-    def _run_query_list(self, query: str) -> List[Any]:
+    async def _run_query_list(self, query: str) -> List[Any]:
         """
         [NEW] Helper to safely execute Gremlin queries (Returns LIST of results).
         Required for get_neighbors and bulk fetches.
@@ -77,10 +82,12 @@ class GraphService:
             if not submit: return []
             
             future = submit(query)
-            result_set = future.result() if hasattr(future, 'result') else future
+            # PROPER ASYNC AWAIT
+            result_set = await asyncio.wrap_future(future) if hasattr(future, 'add_done_callback') else future
             
             if hasattr(result_set, 'all'):
-                results = result_set.all().result()
+                results_future = result_set.all()
+                results = await asyncio.wrap_future(results_future) if hasattr(results_future, 'add_done_callback') else results_future.result()
             else:
                 results = result_set
                 
@@ -109,6 +116,12 @@ class GraphService:
         if "branch" in h: return "Branch"
         if "activity" in h or "action" in h: return "Activity"
         if "time" in h or "date" in h: return "Time"
+        
+        # --- FIX: Added demographic & outcome checks so they don't become 'Attribute' ---
+        if "job" in h: return "Job"
+        if "marital" in h: return "Marital"
+        if "outcome" in h: return "Outcome"
+        
         if "product" in h or "account_type" in h: return "Product"
         if "balance" in h or "amount" in h: return "Amount"
         
@@ -142,28 +155,61 @@ class GraphService:
         return base.split('_')[0] if "_" in base else base
 
     # ==========================================
-    # 2. READ OPERATIONS (NEW & EXISTING)
+    # 2. READ OPERATIONS (FIXED FOR COSMOS DB COMPATIBILITY)
     # ==========================================
 
     async def get_neighbors(self, node_id: str) -> Dict[str, Any]:
         """
-        [NEW] Fetches the specific node, its connecting edges, and direct neighbors.
-        Used for 'Lazy Loading' (Backend Fetch) in the UI when expanding a node.
+        Fetches the specific node, its connecting edges, and direct neighbors.
+        REWRITTEN: Avoids elementMap() because Cosmos DB doesn't support it.
+        Uses project() and valueMap(true) for full compatibility.
         """
         print(f"--- [FETCH NEIGHBORS] Node ID: {node_id} ---", flush=True)
         try:
-            # 1. Fetch Nodes (Central Node + Neighbors)
-            # Uses 'elementMap()' to get full properties of the nodes
-            nodes_query = f"g.V('{node_id}').union(identity(), both()).dedup().elementMap()"
-            nodes_data = self._run_query_list(nodes_query)
+            # 1. Fetch Nodes (Central Node + Neighbors) using valueMap(true) for Cosmos support
+            nodes_query = f"g.V('{node_id}').union(identity(), both()).dedup().valueMap(true)"
+            nodes_data = await self._run_query_list(nodes_query)
 
-            # 2. Fetch Edges (Connecting the central node)
-            edges_query = f"g.V('{node_id}').bothE().elementMap()"
-            edges_data = self._run_query_list(edges_query)
+            # 2. Fetch Edges using project() for Cosmos DB support
+            edges_query = (
+                f"g.V('{node_id}').bothE().dedup()"
+                f".project('id', 'label', 'inV', 'outV', 'properties')"
+                f".by(id).by(label).by(inV().id()).by(outV().id()).by(valueMap())"
+            )
+            edges_data = await self._run_query_list(edges_query)
+
+            # 3. Format the data to match what the frontend expects
+            formatted_nodes = []
+            for n in nodes_data:
+                # Tinkerpop/Cosmos returns T.id and T.label as enums, we must stringify them
+                n_id = str(n.get('id', n.get('T.id', '')))
+                n_label = str(n.get('label', n.get('T.label', '')))
+                
+                # Clean up properties (Cosmos returns properties as lists, e.g., {'name': ['John']})
+                props = {}
+                for k, v in n.items():
+                    if k not in ['id', 'label', 'T.id', 'T.label']:
+                        props[k] = v[0] if isinstance(v, list) else v
+                
+                formatted_nodes.append({
+                    "id": n_id,
+                    "label": n_label,
+                    "properties": props
+                })
+
+            formatted_edges = []
+            for e in edges_data:
+                formatted_edges.append({
+                    "id": str(e.get('id')),
+                    "label": str(e.get('label')),
+                    "from": str(e.get('outV')),
+                    "to": str(e.get('inV')),
+                    "properties": e.get('properties', {})
+                })
 
             return {
-                "nodes": nodes_data,
-                "edges": edges_data
+                "nodes": formatted_nodes,
+                "edges": formatted_edges
             }
         except Exception as e:
             logger.error(f"Error fetching neighbors for {node_id}: {str(e)}")
@@ -192,7 +238,7 @@ class GraphService:
         # FIX: Ensure manual edges appear in the UI's Document View!
         if "doc" not in properties and "documentId" not in properties:
             query = f"g.V('{from_id}').project('doc', 'pk').by(coalesce(values('documentId'), constant(''))).by(coalesce(values('{self.PARTITION_KEY}'), constant('')))"
-            node_data = self._run_query(query)
+            node_data = await self._run_query(query)
             
             if node_data and isinstance(node_data, dict):
                 if node_data.get('doc'):
@@ -214,7 +260,7 @@ class GraphService:
         """
         if new_props is None: new_props = {}
         query = f"g.E('{rel_id}').project('sid', 'tid', 'props').by(outV().id()).by(inV().id()).by(valueMap())"
-        edge_data = self._run_query(query)
+        edge_data = await self._run_query(query)
 
         if not edge_data or not isinstance(edge_data, dict): 
             return {"error": "Relationship not found"}
@@ -259,7 +305,7 @@ class GraphService:
 
         # 4. AUTO-DISCOVER the true PK if we don't have it using the sync helper
         if not true_pk:
-            val = self._run_query(f"g.V('{entity_id}').values('{self.PARTITION_KEY}')")
+            val = await self._run_query(f"g.V('{entity_id}').values('{self.PARTITION_KEY}')")
             if val:
                 true_pk = str(val)
                 print(f"--- [AUTO-DISCOVERY] Found PK '{true_pk}' for updating node '{entity_id}' ---", flush=True)
@@ -300,7 +346,7 @@ class GraphService:
 
         # 4. Auto-Discover the specific node's PK using the sync helper
         if not true_pk:
-            val = self._run_query(f"g.V('{entity_id}').values('{self.PARTITION_KEY}')")
+            val = await self._run_query(f"g.V('{entity_id}').values('{self.PARTITION_KEY}')")
             if val:
                 true_pk = str(val)
                 print(f"--- [AUTO-DISCOVERY] Found PK '{true_pk}' for deleting node '{entity_id}' ---", flush=True)
@@ -394,7 +440,105 @@ class GraphService:
         return insights
 
     # ==========================================
-    # 4. CSV / GRAPH PROCESSING (YOUR ORIGINAL LOGIC)
+    # 3.6 ENTERPRISE RCA AGENT (BACKGROUND TASK)
+    # ==========================================
+    async def _run_post_ingestion_rca(self, case_id: str, domain: str, filename: str):
+        """
+        Runs in the background after ingestion. 
+        Analyzes the timeline, extracts 1 Cause and 1 Effect, and saves them to the DB.
+        """
+        logger.info(f"Starting Background RCA for Case: {case_id}")
+        
+        try:
+            # 1. Fetch the newly ingested timeline
+            neighbors = await self.get_neighbors(case_id)
+            timeline_events = []
+            connected_nodes_map = {n['id']: n for n in neighbors.get('nodes', [])}
+            
+            for edge in neighbors.get('edges', []):
+                target_id = edge['to'] if edge['from'] == case_id else edge['from']
+                target_node = connected_nodes_map.get(target_id, {})
+                target_name = target_node.get('properties', {}).get('name', target_id)
+                target_type = target_node.get('label', 'Unknown')
+                rel_label = edge.get('label', 'LINKED_TO')
+                timestamp = edge.get('properties', {}).get('timestamp', 'Unknown')
+                
+                if timestamp != 'Unknown':
+                    timeline_events.append({"date": timestamp, "desc": f"[{timestamp}] {rel_label} -> {target_name} ({target_type})"})
+            
+            if not timeline_events:
+                return
+
+            timeline_events.sort(key=lambda x: x["date"])
+            timeline_text = "\n".join([e["desc"] for e in timeline_events])
+
+            # 2. Call OpenAI for Root Cause Analysis
+            ai_client = AsyncAzureOpenAI(
+                api_key=settings.AZURE_OPENAI_API_KEY,
+                api_version=settings.AZURE_OPENAI_API_VERSION,
+                azure_endpoint=settings.AZURE_OPENAI_ENDPOINT
+            )
+
+            prompt = f"""
+            You are an automated Root Cause Analysis Agent for the {domain.upper()} sector.
+            Analyze this case timeline:
+            {timeline_text}
+
+            Identify any process anomalies (e.g., Activation immediately followed by Closure).
+            Extract exactly ONE Root Cause and ONE Business Effect. 
+            Generate a short, downloadable client report explaining WHY this happened in the context of the {domain.upper()} sector.
+            
+            Return ONLY valid JSON in this exact format:
+            {{
+                "root_cause_name": "Short 3-word cause",
+                "effect_name": "Short 3-word effect",
+                "client_report": "A 2-sentence explanation of why this happened and the financial/risk impact."
+            }}
+            """
+
+            response = await ai_client.chat.completions.create(
+                model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            
+            # Use safe parse
+            content = response.choices[0].message.content
+            rca_data = json.loads(content)
+            
+            # 3. Create explicit Nodes in the Database for Cause and Effect
+            cause_node_id = self._clean_id("RootCause", f"{case_id}_{rca_data['root_cause_name']}")
+            effect_node_id = self._clean_id("BusinessEffect", f"{case_id}_{rca_data['effect_name']}")
+
+            # Save Root Cause Node
+            await self.repo.create_entity(cause_node_id, "RootCause", {
+                "name": rca_data['root_cause_name'],
+                "normType": "RootCause",
+                "documentId": filename,
+                self.PARTITION_KEY: domain
+            })
+            await self.repo.create_relationship(case_id, cause_node_id, "HAS_ROOT_CAUSE", {"doc": filename})
+
+            # Save Business Effect Node
+            await self.repo.create_entity(effect_node_id, "BusinessEffect", {
+                "name": rca_data['effect_name'],
+                "normType": "BusinessEffect",
+                "documentId": filename,
+                self.PARTITION_KEY: domain
+            })
+            await self.repo.create_relationship(case_id, effect_node_id, "HAS_BUSINESS_EFFECT", {"doc": filename})
+
+            # Save the full downloadable report directly onto the Case node properties
+            await self.repo.update_entity(case_id, {"rca_report": rca_data['client_report']}, domain)
+            
+            logger.info(f"Successfully saved RCA for {case_id} to Database.")
+
+        except Exception as e:
+            logger.error(f"Background RCA Failed for {case_id}: {e}")
+
+    # ==========================================
+    # 4. CSV / GRAPH PROCESSING
     # ==========================================
 
     async def process_narrative(self, narrative_text: str, filename: str) -> Dict[str, Any]:
@@ -427,14 +571,13 @@ class GraphService:
         # 2. Ban-List
         all_case_ids_banlist = set(df[case_col].astype(str).str.strip().unique())
 
-        # --- CHANGE 1: Use a Dictionary for Nodes to allow property updates ---
         all_entities_map = {} 
         all_relationships = []
         created_edges = set()
 
         # 3. Sequence Tracker
         case_activity_tracker = {}
-        case_activity_labels = {} # Track labels for human-readable properties
+        case_activity_labels = {} 
 
         # A. DOCUMENT NODE
         doc_id = filename
@@ -482,8 +625,9 @@ class GraphService:
             # C. TRACK CURRENT ACTIVITY
             current_activity_id = None
             current_activity_label = ""
+            row_context_nodes = [] 
 
-            # D. PROCESS COLUMNS
+            # D. PROCESS COLUMNS (Nodes Only First)
             for col in df.columns:
                 val = str(row[col]).strip()
                 if not val or val.lower() == "nan": continue
@@ -492,14 +636,16 @@ class GraphService:
 
                 node_type = self._detect_type(col, val)
                 
-                # --- FIX: Removed the line that skipped 'Amount' ---
-                # if node_type == "Amount": continue 
-
+                # --- NEW UX FIX: We no longer create generic 'Time' nodes ---
+                if node_type == "Time": continue
+                
                 node_id = self._clean_id(node_type, val)
 
                 if node_type == "Activity":
                     current_activity_id = node_id
                     current_activity_label = val
+
+                row_context_nodes.append({"id": node_id, "type": node_type, "val": val})
 
                 # Create Context Node
                 if node_id not in all_entities_map:
@@ -520,38 +666,48 @@ class GraphService:
                         all_relationships.append({"from": doc_id, "to": node_id, "label": f"HAS_{node_type.upper()}", "properties": {"doc": filename}})
                         created_edges.add(edge_key)
 
-                # Link Case -> Context
-                rel_label = "LINKED_TO"
-                if node_type == "Branch": rel_label = "MANAGED_BY"
-                elif node_type == "Activity": rel_label = "PERFORMS"
-                elif node_type == "Product": rel_label = "HAS_PRODUCT"
-                elif node_type == "Customer": rel_label = "OWNED_BY"
-                elif node_type == "Time": rel_label = "OCCURRED_ON"
-                # --- FIX: Added logic to link Amount/Balance ---
-                elif node_type == "Amount": rel_label = "HAS_BALANCE"
+            # E. CREATE HIERARCHICAL EDGES (The Star Model)
+            for ctx in row_context_nodes:
+                ctx_id = ctx["id"]
+                ctx_type = ctx["type"]
+                time_val = str(row.get(time_col, ''))[:19] if time_col else ''
 
-                edge_unique_key = f"{case_id}_{node_id}_{rel_label}"
-                
-                if node_type == "Activity":
-                    time_val = str(row.get(time_col, ''))[:10]
-                    # Activities allow duplicate edges for timestamps
-                    all_relationships.append({
-                        "from": case_id, 
-                        "to": node_id, 
-                        "label": rel_label, 
-                        "properties": {"timestamp": time_val, "doc": filename}
-                    })
-                else:
+                # 1. LINK CASE -> ACTIVITY (with timestamp)
+                if ctx_type == "Activity":
+                    edge_unique_key = f"{case_id}_{ctx_id}_PERFORMS_{time_val}"
                     if edge_unique_key not in created_edges:
                         all_relationships.append({
+                            "id": edge_unique_key,
                             "from": case_id, 
-                            "to": node_id, 
-                            "label": rel_label, 
-                            "properties": {"doc": filename}
+                            "to": ctx_id, 
+                            "label": "PERFORMS", 
+                            "properties": {"timestamp": time_val, "doc": filename}
                         })
                         created_edges.add(edge_unique_key)
 
-            # E. SEQUENCE LOGIC: OPTION B (SEMANTIC OVERRIDE)
+                # 2. LINK CASE -> CONTEXT (Customer, Branch, Product, Amount)
+                else:
+                    rel_label = "LINKED_TO"
+                    if ctx_type == "Customer": rel_label = "OWNED_BY"
+                    elif ctx_type == "Branch": rel_label = "AT_BRANCH"
+                    elif ctx_type == "Product": rel_label = "HAS_PRODUCT"
+                    elif ctx_type == "Amount": rel_label = "AMOUNT"
+                    
+                    # Injecting time_val into the key ensures overlapping events fan out
+                    edge_unique_key = f"{case_id}_{ctx_id}_{rel_label}_{time_val}"
+                    
+                    if edge_unique_key not in created_edges:
+                        all_relationships.append({
+                            "id": edge_unique_key,
+                            "from": case_id, 
+                            "to": ctx_id, 
+                            "label": rel_label, 
+                            "properties": {"timestamp": time_val, "doc": filename}
+                        })
+                        created_edges.add(edge_unique_key)
+
+
+            # F. SEQUENCE LOGIC: OPTION B (SEMANTIC OVERRIDE)
             if current_activity_id:
                 if case_id in case_activity_tracker:
                     previous_activity_id = case_activity_tracker[case_id]
@@ -562,26 +718,27 @@ class GraphService:
                         # AI Intelligence check for the current activity transition
                         ai_insights = await self._ai_ingestion_analysis(current_activity_label)
                         
-                        # Determine the Semantic Label (Override defaults if anomaly detected)
-                        seq_label = "NEXT_STEP"
+                        # Determine the Semantic Label (Shortened!)
+                        seq_label = "NEXT"
                         risk_cat = "Process"
                         
                         if ai_insights["isCause"] == "True":
                             seq_label = "CAUSES"
                             risk_cat = "Cause"
                         elif ai_insights["isEffect"] == "True":
-                            seq_label = "RESULTED_IN"
+                            seq_label = "RESULTS_IN" # Shortened
                             risk_cat = "Effect"
 
                         # Draw a SINGLE sequence edge (No parallel lines for the exact same step) 
                         # using dedupe=False logic (appending _idx) so we get thick visual bands!
                         seq_key = f"{previous_activity_id}_{current_activity_id}_{seq_label}_{idx}"
                         if seq_key not in created_edges:
+                            time_val = str(row.get(time_col, ''))[:19] if time_col else ''
                             all_relationships.append({
-                                "id": seq_key, # <--- UNIQUE ID INJECTED FOR PARALLEL BANDS
+                                "id": seq_key, 
                                 "from": previous_activity_id, "to": current_activity_id,
                                 "label": seq_label, 
-                                "properties": {"doc": filename, "riskCategory": risk_cat, "case_ref": case_val}
+                                "properties": {"doc": filename, "riskCategory": risk_cat, "case_ref": case_val, "timestamp": time_val}
                             })
                             created_edges.add(seq_key)
 
@@ -600,6 +757,21 @@ class GraphService:
 
         await self.add_entities(all_entities_list)
         await self.add_relationships(all_relationships)
+        
+        # --- NEW: TRIGGER BACKGROUND RCA AGENT ---
+        # Identify anomalous cases based on generated relationships
+        anomalous_cases = set()
+        for r in all_relationships:
+            if r["label"] in ["CAUSES", "RESULTS_IN"]:
+                case_ref = r.get("properties", {}).get("case_ref")
+                if case_ref:
+                    anomalous_cases.add(self._clean_id("Case", case_ref))
+
+        # Launch background analysis for identified cases
+        for a_case in anomalous_cases:
+            asyncio.create_task(self._run_post_ingestion_rca(a_case, domain, filename))
+        # -----------------------------------------
+
         return {"filename": filename, "entities": len(all_entities_list)}
 
     async def _process_unstructured_text(self, text, filename, domain):

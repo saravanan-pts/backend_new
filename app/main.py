@@ -46,10 +46,21 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
+    # ---- Explicit Origins for CORS ----
+    # Browsers reject allow_credentials=True if allow_origins contains a wildcard ("*").
+    # We explicitly list local and production frontends here to pass security checks.
+    origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://kg-ui.irmai.io",
+        "http://localhost:3111",     # <--- ADD THIS LINE FOR YOUR CURRENT UI PORT
+        "http://127.0.0.1:3111",     # <--- ADD THIS LINE AS WELL
+    ]
+
     # ---- CORS ----
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "*"], 
+        allow_origins=origins, 
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
