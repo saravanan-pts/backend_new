@@ -95,7 +95,7 @@ class GraphRepository:
 
             final_item = {
                 "id": node_id,
-                "label": display_name,    
+                "label": display_name,   
                 "type": gremlin_category, 
                 "properties": {} 
             }
@@ -235,12 +235,17 @@ class GraphRepository:
         await self._execute_query(query)
 
     async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None) -> None:
-        pk_val = partition_key if partition_key else entity_id
+        # ✅ FIX: Read PK from properties first so Cosmos DB can actually find the node!
+        pk_val = partition_key or properties.get(self.pk_key) or properties.get("partitionKey") or entity_id
+        
         query = f"g.V('{entity_id}').has('{self.pk_key}', '{pk_val}')"
+        
         for k, v in properties.items():
-            if k in ["id", self.pk_key]: continue
+            if k in ["id", self.pk_key, "partitionKey"]: continue
             safe_v = self._escape(v)
             query += f".property('{k}', '{safe_v}')"
+            
+        logger.info(f"Executing Update Query: {query}")
         await self._execute_query(query)
 
     async def delete_entity(self, entity_id: str, partition_key: str = None) -> None:

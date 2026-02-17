@@ -276,20 +276,26 @@ class GraphService:
     async def delete_relationship(self, rel_id: str):
         return await self.repo.delete_relationship(rel_id)
 
-    async def update_entity(self, entity_id: str, properties: Dict[str, Any], partition_key: str = None):
+    async def update_entity(self, entity_id: str, payload: Dict[str, Any], partition_key: str = None):
         """
         Updates node properties cleanly without corrupting Types or losing PKs.
         """
         print(f"--- [UPDATE REQUEST RECEIVED] Node ID: {entity_id} | Provided PK/Doc: {partition_key} ---", flush=True)
         
         true_pk = partition_key
-        doc_id = properties.get("documentId")
         
+        # --- THE FIX: FLATTEN THE PAYLOAD ---
+        # The UI sends data wrapped like: { label: "...", type: "...", properties: {...} }
+        # We must extract and merge these so the graph repository updates everything properly.
+        inner_props = payload.get("properties", {})
+        doc_id = inner_props.get("documentId") or payload.get("documentId")
+
         # 1. Strip bad UUID Partition Keys sent by the frontend
-        if self.PARTITION_KEY in properties:
-            val = str(properties[self.PARTITION_KEY])
-            if self._is_uuid(val) or val == entity_id:
-                del properties[self.PARTITION_KEY]
+        for target_dict in [payload, inner_props]:
+            if self.PARTITION_KEY in target_dict:
+                val = str(target_dict[self.PARTITION_KEY])
+                if self._is_uuid(val) or val == entity_id:
+                    del target_dict[self.PARTITION_KEY]
 
         # 2. STRIP THE API ROUTER FALLBACK
         if true_pk == entity_id:
@@ -310,19 +316,27 @@ class GraphService:
                 true_pk = str(val)
                 print(f"--- [AUTO-DISCOVERY] Found PK '{true_pk}' for updating node '{entity_id}' ---", flush=True)
 
+        # 5. ASSEMBLE FINAL PROPERTIES FOR THE DATABASE
+        final_props = {**inner_props}
+
         # Re-inject verified context
-        if true_pk: properties[self.PARTITION_KEY] = true_pk
-        if doc_id: properties["documentId"] = doc_id
+        if true_pk: final_props[self.PARTITION_KEY] = true_pk
+        if doc_id: final_props["documentId"] = doc_id
 
-        # 5. FIX: Stop overwriting Concept 'Type' with the display 'Name'
-        if "type" in properties:
-            clean_type = str(properties["type"]).strip().title()
-            properties["normType"] = clean_type
-            properties["type"] = clean_type
-            properties["entityType"] = clean_type
+        # Safely enforce the new Type and Label globally
+        if "label" in payload:
+            final_props["name"] = payload["label"]
+            final_props["label"] = payload["label"]
 
-        print(f"--- [EXECUTING UPDATE] Node ID: {entity_id} | Final PK: {true_pk} ---", flush=True)
-        return await self.repo.update_entity(entity_id, properties)
+        node_type = payload.get("type") or inner_props.get("type")
+        if node_type:
+            clean_type = str(node_type).strip().title()
+            final_props["normType"] = clean_type
+            final_props["type"] = clean_type
+            final_props["entityType"] = clean_type
+
+        print(f"--- [EXECUTING UPDATE] Node ID: {entity_id} | Final PK: {true_pk} | Properties: {list(final_props.keys())} ---", flush=True)
+        return await self.repo.update_entity(entity_id, final_props)
 
     async def delete_entity(self, entity_id: str, partition_key: str = None):
         """
