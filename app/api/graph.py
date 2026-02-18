@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 
 class FetchPayload(BaseModel):
-    limit: int = 1000
+    limit: int = 2000 #change value here for number of nodes while loading
     filters: Dict[str, Any] = {}
     documentId: Optional[str] = None
     document_id: Optional[str] = None

@@ -5,36 +5,43 @@ from fastapi import FastAPI, Body, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from typing import Dict, Any
-from pydantic import BaseModel  # <--- ADDED THIS
+from pydantic import BaseModel
 
-# Apply nest_asyncio to prevent event loop errors in some environments
+# Apply nest_asyncio to prevent event loop errors
 nest_asyncio.apply()
 
 # Load environment variables
 load_dotenv()
 
-# Import Service (needed for the root /clear endpoint and neighbors)
 from app.services.graph_service import graph_service
 from app.repositories.graph_repository import graph_repository
-
-# Import Routers
 from app.api import health, process, clear, entities, relationships, graph, documents, search, analysis
 
-# Configure Logging
+# ==========================================
+# CLEAN LOGGING CONFIGURATION
+# ==========================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s:%(name)s:%(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# Lifespan context manager for startup/shutdown events
+# 1. Silence noisy Azure/OpenAI HTTP requests
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# 2. Filter out "/health" spam from the terminal
+class HealthCheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
+# ==========================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("Starting up... Connecting to Cosmos DB Gremlin API")
     await graph_repository.connect()
     yield
-    # Shutdown
     logger.info("Shutting down... Closing connections")
     await graph_repository.close()
 
@@ -47,17 +54,14 @@ def create_app() -> FastAPI:
     )
 
     # ---- Explicit Origins for CORS ----
-    # Browsers reject allow_credentials=True if allow_origins contains a wildcard ("*").
-    # We explicitly list local and production frontends here to pass security checks.
     origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://kg-ui.irmai.io",
-        "http://localhost:3111",     # <--- ADD THIS LINE FOR YOUR CURRENT UI PORT
-        "http://127.0.0.1:3111",     # <--- ADD THIS LINE AS WELL
+        "http://localhost:3111",     
+        "http://127.0.0.1:3111",     
     ]
 
-    # ---- CORS ----
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins, 
@@ -67,56 +71,33 @@ def create_app() -> FastAPI:
     )
 
     # ---- Register Routers ----
-    # Health & Processing
     app.include_router(health.router, prefix="/api/health", tags=["Health"])
     app.include_router(process.router, prefix="/api/process", tags=["Process"])
-    
-    # Admin / Clear
     app.include_router(clear.router, prefix="/api/clear", tags=["Admin"]) 
-    
-    # Entities & Relationships (CRUD)
     app.include_router(entities.router, prefix="/entities", tags=["Entities"])
     app.include_router(relationships.router, prefix="/relationships", tags=["Relationships"])
-    
-    # Graph Visualization & Documents
     app.include_router(graph.router) 
     app.include_router(documents.router)
-
-    # Search Router
     app.include_router(search.router) 
-
-    # Analysis Router
     app.include_router(analysis.router)
 
-    # ==========================================
-    # NEW ENDPOINT: LAZY LOADING (NEIGHBORS)
-    # ==========================================
     class NeighborRequest(BaseModel):
         nodeId: str
 
     @app.post("/api/graph/neighbors")
     async def get_node_neighbors(request: NeighborRequest):
-        """
-        Called when a user clicks a node in the UI.
-        Fetches the node and its direct connections from Cosmos DB.
-        """
         try:
-            # Calls the new method we added to GraphService
             data = await graph_service.get_neighbors(request.nodeId)
             return data
         except Exception as e:
             logger.error(f"Error in neighbor fetch: {str(e)}")
-            # Return empty structure so UI doesn't crash
             return {"nodes": [], "edges": []}
-    # ==========================================
 
-    # --- Root Health Check ---
     @app.get("/health")
     async def root_health_check():
         status = "connected" if graph_repository.client else "disconnected"
         return {"status": "ok", "database": status, "service": "Knowledge Graph Backend"}
 
-    # --- Root Endpoint (Fixes 404 logs on base URL) ---
     @app.get("/")
     async def root():
         return {
@@ -125,12 +106,10 @@ def create_app() -> FastAPI:
             "health_url": "/health"
         }
 
-    # --- Root Clear Endpoint ---
     @app.post("/clear")
     async def root_clear_graph(payload: Dict[str, Any] = Body(default={"scope": "all"})):
         try:
             scope = payload.get("scope", "all")
-            logger.info(f"Root /clear called with scope: {scope}")
             count = await graph_repository.clear_graph(scope)
             return {"status": "success", "message": f"Graph cleared ({scope})", "deleted_count": count}
         except Exception as e:
