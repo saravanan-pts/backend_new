@@ -99,12 +99,15 @@ resource "kubernetes_deployment" "backend" {
 resource "kubernetes_service" "backend" {
   metadata { 
     name = "irmai-kg-backend-svc" 
-    # Optional: If you are using Azure, Cloudflare might prefer specific annotations 
-    # for the LoadBalancer, but the port mapping below is the primary fix.
   }
   spec {
     selector = { app = "irmai-kg-backend" }
     
+    # ADD THIS LINE: This locks the service to your specific IP
+    load_balancer_ip = "40.90.247.12"
+
+    type = "LoadBalancer"
+
     # Standard HTTP Port
     port {
       name        = "http"
@@ -113,14 +116,12 @@ resource "kubernetes_service" "backend" {
       protocol    = "TCP"
     }
 
-    # FIXED: Added Port 443 mapping for Cloudflare HTTPS (Solves 522 error)
+    # Port 443 mapping
     port {
       name        = "https"
       port        = 443
       target_port = 8000
       protocol    = "TCP"
     }
-
-    type = "LoadBalancer"
   }
 }
