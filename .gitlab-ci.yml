@@ -22,6 +22,10 @@ build_image:
   stage: build
   image: mcr.microsoft.com/azure-cli:latest
   script:
+# --- ADD THESE 3 LINES ---
+    - mkdir -p certs
+    - echo "$CLOUDFLARE_CERT" > certs/cert.pem
+    - echo "$CLOUDFLARE_KEY" > certs/key.pem
     - az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$GITLAB_OIDC_TOKEN"
     - az acr build --registry "$AZURE_ACR_NAME" --image "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" --image "$IMAGE_NAME:latest" .
 
