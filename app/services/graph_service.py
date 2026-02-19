@@ -110,24 +110,87 @@ class GraphService:
         return f"{prefix}_{safe_val}"
 
     def _detect_type(self, header: str, value: str) -> str:
+        """
+        [UPDATED] Semantic type detection based on Enterprise Data Schema.
+        Maps raw CSV column headers to definitive Knowledge Graph Node Types.
+        """
         h = header.lower()
         v = str(value).lower()
+        
+        # 1. Core / Identifiers
         if "customer" in h: return "Customer"
+        if "vendor" in h: return "Vendor"
         if "branch" in h: return "Branch"
         if "activity" in h or "action" in h: return "Activity"
         if "time" in h or "date" in h: return "Time"
         
-        # --- FIX: Added demographic & outcome checks so they don't become 'Attribute' ---
+        # 2. Geography (Moved up to prevent 'policy_state' -> 'Policy')
+        if "state" in h: return "State"
+        if "region" in h: return "Region"
+        
+        # 3. Account & Financials
+        if "account" in h:
+            if "type" in h: return "AccountType"
+            return "Account"
+        if "product" in h: return "Product"
+        if "balance" in h or "amount" in h or "inr" in h or "$" in h: 
+            if "claim" in h: return "ClaimAmount"
+            if "loan" in h: return "LoanAmount"
+            if "premium" in h: return "PremiumAmount"
+            return "Amount"
+        if "loan_type" in h: return "LoanType"
+        if "deductible" in h: return "Deductible"
+        if "premium" in h: return "PremiumAmount"
+        if "customer_lifetime_value" in h or "clv" in h: return "CustomerLifetimeValue"
+        
+        # 4. Demographics & Profiling
         if "job" in h: return "Job"
-        if "marital" in h: return "Marital"
+        if "marital" in h: return "MaritalStatus"
+        if "age" in h or "sex" in h or "gender" in h: return "Demographics"
+        if "driverrating" in h or "experience" in h: return "DriverProfile"
+        
+        # 5. Operations & Claims
+        if "agent" in h or "repnumber" in h: return "Agent"
         if "outcome" in h: return "Outcome"
+        if "channel" in h: return "Channel"
+        if "nps" in h: return "NPS"
+        if "claim_type" in h: return "ClaimType"
+        if "file_name" in h or "document" in h: return "Document"
+        if "pages" in h: return "PageCount"
+        if "status" in h: return "Status"
+        if "policy" in h: 
+            if "type" in h: return "PolicyType"
+            return "Policy"
+            
+        # 6. Risk, Fraud & Incidents
+        if "fraud" in h: return "FraudFlag"
+        if "risk" in h: return "RiskLevel"
+        if "accident" in h or "incident" in h:
+            if "type" in h: return "IncidentType"
+            if "severity" in h: return "IncidentSeverity"
+            if "previous" in h: return "IncidentHistory"
+            return "Incident"
+        if "fault" in h: return "Fault"
+        if "authorities" in h or "police" in h: return "Authority"
+        if "witness" in h: return "Witness"
         
-        if "product" in h or "account_type" in h: return "Product"
-        if "balance" in h or "amount" in h: return "Amount"
+        # 7. Vehicles & Telematics
+        if "vehicle" in h or "auto" in h or "car" in h:
+            if "class" in h: return "VehicleClass"
+            if "make" in h: return "VehicleMake"
+            if "model" in h: return "VehicleModel"
+            if "year" in h or "age" in h: return "VehicleAge"
+            if "size" in h: return "VehicleSize"
+            return "Vehicle"
+        if "device" in h: return "Device"
+        if "sensor" in h: return "SensorValue"
+        if "alarm" in h: return "AlarmClass"
         
+        # 8. Regex fallbacks for coded values
         if re.match(r'^b\d+$', v): return "Branch"
         if re.match(r'^c\d+$', v): return "Customer"
         if re.match(r'\d{4}-\d{2}-\d{2}', v): return "Time"
+        
         return "Attribute"
 
     def _determine_risk_category(self, label: str) -> str:
@@ -439,17 +502,24 @@ class GraphService:
         text = str(activity_label).lower()
         insights = {"riskLevel": "Low", "isCause": "False", "isEffect": "False", "aiSummary": "Standard operational step."}
 
-        if any(word in text for word in ['fail', 'error', 'timeout', 'reject', 'denied', 'fraud', 'divergent', 'anomaly', 'breach']):
+        # EXPANDED TRIPWIRES for Claims, Complaints, Telematics, SIU, and Call Centers
+        high_risk_keywords = [
+            'fail', 'error', 'timeout', 'reject', 'denied', 'fraud', 'divergent', 
+            'anomaly', 'breach', 'claim', 'loss', 'complaint', 'damage', 'theft', 
+            'collision', 'declined', 'no_result', 'failure'
+        ]
+
+        if any(word in text for word in high_risk_keywords):
             insights["riskLevel"] = "High"
             insights["isCause"] = "True"
             insights["riskCategory"] = "Cause"
-            insights["aiSummary"] = f"AI Risk Flag: '{activity_label}' indicates a critical failure or anomaly."
+            insights["aiSummary"] = f"AI Risk Flag: '{activity_label}' indicates a critical failure, claim, or anomaly."
         
-        elif any(word in text for word in ['closed', 'block', 'suspend', 'locked', 'rejeitado', 'terminated', 'cleared']):
+        elif any(word in text for word in ['closed', 'block', 'suspend', 'locked', 'rejeitado', 'terminated', 'cleared', 'resolution']):
             insights["riskLevel"] = "Medium"
             insights["isEffect"] = "True"
             insights["riskCategory"] = "Effect"
-            insights["aiSummary"] = f"AI Risk Flag: '{activity_label}' is a punitive/terminal state."
+            insights["aiSummary"] = f"AI Risk Flag: '{activity_label}' is a punitive, resolution, or terminal state."
 
         return insights
 
@@ -699,13 +769,32 @@ class GraphService:
                         })
                         created_edges.add(edge_unique_key)
 
-                # 2. LINK CASE -> CONTEXT (Customer, Branch, Product, Amount)
+                # 2. LINK CASE -> CONTEXT (Semantic Edges)
                 else:
-                    rel_label = "LINKED_TO"
+                    rel_label = "LINKED_TO" # Fallback
+                    
+                    # Core & People
                     if ctx_type == "Customer": rel_label = "OWNED_BY"
-                    elif ctx_type == "Branch": rel_label = "AT_BRANCH"
-                    elif ctx_type == "Product": rel_label = "HAS_PRODUCT"
-                    elif ctx_type == "Amount": rel_label = "AMOUNT"
+                    elif ctx_type == "Agent": rel_label = "ASSIGNED_TO"
+                    elif ctx_type in ["Demographics", "MaritalStatus", "Job", "DriverProfile"]: rel_label = "HAS_PROFILE"
+                    
+                    # Geography
+                    elif ctx_type in ["State", "Region", "Location", "Branch"]: rel_label = "LOCATED_IN"
+                    
+                    # Vehicles & Assets
+                    elif ctx_type in ["Vehicle", "VehicleMake", "VehicleModel", "VehicleAge", "VehicleClass", "VehicleSize"]: rel_label = "HAS_VEHICLE"
+                    
+                    # Financials
+                    elif ctx_type in ["Amount", "ClaimAmount", "PremiumAmount", "LoanAmount", "Deductible", "FinancialValue"]: rel_label = "HAS_AMOUNT"
+                    elif ctx_type in ["Product", "Policy", "PolicyType", "Account", "AccountType", "LoanType"]: rel_label = "HAS_POLICY"
+                    
+                    # Risk & Incidents
+                    elif ctx_type in ["Incident", "IncidentType", "IncidentSeverity"]: rel_label = "INVOLVED_IN"
+                    elif ctx_type in ["FraudFlag", "RiskLevel", "Fault"]: rel_label = "HAS_RISK_FLAG"
+                    
+                    # Meta
+                    elif ctx_type in ["Status", "Outcome"]: rel_label = "HAS_STATUS"
+                    elif ctx_type == "Channel": rel_label = "VIA_CHANNEL"
                     
                     # Injecting time_val into the key ensures overlapping events fan out
                     edge_unique_key = f"{case_id}_{ctx_id}_{rel_label}_{time_val}"
