@@ -26,4 +26,4 @@ COPY ./certs /app/certs
 
 # FIX: Force uvicorn to use the standard asyncio loop to allow nest_asyncio to work
 # 2. Update the CMD to include SSL flags
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio", "--ssl-keyfile", "/app/certs/key.pem", "--ssl-certfile", "/app/certs/cert.pem"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio", "--ssl-keyfile", "./certs/key.pem", "--ssl-certfile", "./certs/cert.pem"]
